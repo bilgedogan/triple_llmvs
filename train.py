@@ -4,7 +4,6 @@ import argparse
 
 from utils.configs import Config, str2bool
 from torch.utils.data import DataLoader
-######################################## Pytorch lightning ########################################################
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import Trainer, seed_everything
 seed_everything(1112)
@@ -14,73 +13,92 @@ from networks.model import LLMVS
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type = str, default = 'summe_head2_layer3', help = 'the name of the model')
-    parser.add_argument('--dataset', type = str, default = 'summe', help = 'the name of the dataset')
-    parser.add_argument('--split_idx', type = int, default = 0, help = 'the split index')
-    parser.add_argument('--epochs', type = int, default = 200, help = 'the number of training epochs')
-    parser.add_argument('--reduced_dim', type = int, default = 2048)
-    parser.add_argument('--num_heads', type = int, default = 2)
-    parser.add_argument('--num_layers', type = int, default = 3)
-    parser.add_argument('--tag', type = str, default = 'summe_split0')
-    parser.add_argument('--lr', type = float, default = 1e-4, help = 'the learning rate')
-    parser.add_argument('--pt_path', type=str, default='llama_emb/summe_sum/')
+    parser.add_argument('--config', type=str, required=True,
+                        help='Path to experiment YAML (e.g. configs/experiments/summe_v1.yaml)')
+    # CLI overrides — any value provided here wins over the YAML
+    parser.add_argument('--split_idx',              type=int,   default=None)
+    parser.add_argument('--epochs',                 type=int,   default=None)
+    parser.add_argument('--lr',                     type=float, default=None)
+    parser.add_argument('--reduced_dim',            type=int,   default=None)
+    parser.add_argument('--input_dim',              type=int,   default=None)
+    parser.add_argument('--hidden_dim',             type=int,   default=None)
+    parser.add_argument('--num_model_layers',       type=int,   default=None)
+    parser.add_argument('--num_mst_layers',         type=int,   default=None)
+    parser.add_argument('--num_cmf_layers',         type=int,   default=None)
+    parser.add_argument('--num_heads',              type=int,   default=None)
+    parser.add_argument('--dropout',                type=float, default=None)
+    parser.add_argument('--experiment_name',        type=str,   default=None)
 
-    
     opt = parser.parse_args()
-    kwargs = vars(opt)
-    config = Config(**kwargs)
+    overrides = {k: v for k, v in vars(opt).items() if k != 'config'}
+    config = Config(config_path=opt.config, overrides=overrides)
 
     if config.dataset == 'summe':
         from utils.summe_dataset import SumMeLLaMADataset, TrainBatchCollator, ValBatchCollator
-        train_dataset = SumMeLLaMADataset(mode='train', split_idx=config.split_idx, llama_embedding = config.pt_path)
-        val_dataset = SumMeLLaMADataset(mode='test', split_idx=config.split_idx, llama_embedding = config.pt_path)
+        train_dataset = SumMeLLaMADataset(mode='train', split_idx=config.split_idx, llama_embedding=config.pt_path)
+        val_dataset   = SumMeLLaMADataset(mode='test',  split_idx=config.split_idx, llama_embedding=config.pt_path)
     elif config.dataset == 'tvsum':
-        from utils.tvsum_dataset import TVSumLLaMADataset, TrainBatchCollator,ValBatchCollator
-        train_dataset = TVSumLLaMADataset(mode='train', split_idx=config.split_idx, llama_embedding = config.pt_path)
-        val_dataset = TVSumLLaMADataset(mode='test', split_idx=config.split_idx, llama_embedding = config.pt_path)
-    
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False, num_workers=8, collate_fn = TrainBatchCollator(), pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=8, collate_fn = ValBatchCollator(), pin_memory=True, persistent_workers=True)
+        from utils.tvsum_dataset import TVSumLLaMADataset, TrainBatchCollator, ValBatchCollator
+        train_dataset = TVSumLLaMADataset(mode='train', split_idx=config.split_idx, llama_embedding=config.pt_path)
+        val_dataset   = TVSumLLaMADataset(mode='test',  split_idx=config.split_idx, llama_embedding=config.pt_path)
 
-    
-    model = LLMVS(config = config)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False, num_workers=8,
+                              collate_fn=TrainBatchCollator(), pin_memory=True, persistent_workers=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=1, shuffle=False, num_workers=8,
+                              collate_fn=ValBatchCollator(),   pin_memory=True, persistent_workers=True)
+
+    model = LLMVS(config=config)
     model.cuda()
-        
-    best_rho_model = '{}/best_rho_model'.format(config.save_dir_root)
-    best_tau_model = '{}/best_tau_model'.format(config.save_dir_root)
 
-    checkpoint_callback_rho = ModelCheckpoint(
-    monitor='val_sRho',
-    dirpath= best_rho_model,
-    filename='{epoch:02d}-{val_sRho:.3f}',
-    save_top_k=1,
-    save_last=True,
-    mode='max',
+    best_rho_dir = f'{config.save_dir_root}/best_rho_model'
+    best_tau_dir = f'{config.save_dir_root}/best_tau_model'
+
+    checkpoint_rho = ModelCheckpoint(
+        monitor='val_sRho',
+        dirpath=best_rho_dir,
+        filename='{epoch:02d}-{val_sRho:.3f}',
+        save_top_k=1,
+        save_last=True,
+        mode='max',
+    )
+    checkpoint_tau = ModelCheckpoint(
+        monitor='val_kTau',
+        dirpath=best_tau_dir,
+        filename='{epoch:02d}-{val_kTau:.3f}',
+        save_top_k=1,
+        save_last=True,
+        mode='max',
+    )
+    checkpoint_f1 = ModelCheckpoint(
+        monitor='val_f1',
+        dirpath=f'{config.save_dir_root}/best_f1_model',
+        filename='{epoch:02d}-{val_f1:.3f}',
+        save_top_k=1,
+        save_last=False,
+        mode='max',
     )
 
-    checkpoint_callback_tau = ModelCheckpoint(
-    monitor='val_kTau',
-    dirpath= best_tau_model,
-    filename='{epoch:02d}-{val_kTau:.3f}',
-    save_top_k=1,
-    save_last=True,
-    mode='max',
+    logger = TensorBoardLogger(
+        save_dir='logs',
+        name=config.experiment_name,
+        version=f'split_{config.split_idx}',
     )
 
     trainer = Trainer(
-                    gpus=1,
-                    max_epochs=opt.epochs,
-                    accumulate_grad_batches=2,
-                    precision=16,
-                    gradient_clip_val=0.01,
-                    callbacks=[checkpoint_callback_rho, checkpoint_callback_tau],
-                    benchmark=True,
-                    deterministic=False,
-                    val_check_interval=0.5,
-                    progress_bar_refresh_rate=100,
-                    profiler="simple",
-                    log_every_n_steps=4,
-                    )
+        gpus=1,
+        max_epochs=config.epochs,
+        accumulate_grad_batches=config.accumulate_grad_batches,
+        precision=config.precision,
+        gradient_clip_val=config.gradient_clip_val,
+        callbacks=[checkpoint_rho, checkpoint_tau, checkpoint_f1],
+        logger=logger,
+        benchmark=True,
+        deterministic=False,
+        val_check_interval=0.5,
+        progress_bar_refresh_rate=100,
+        profiler='simple',
+        log_every_n_steps=4,
+    )
 
-    trainer.validate(model,val_loader)
+    trainer.validate(model, val_loader)
     trainer.fit(model, train_loader, val_loader)

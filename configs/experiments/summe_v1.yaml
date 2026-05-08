@@ -1,0 +1,33 @@
+experiment_name: summe_v1
+
+# Dataset
+dataset: summe
+pt_path: llama_emb/summe_sum/
+visual_dim: 1024
+audio_dim: 512
+
+# LLMVS text branch
+reduced_dim: 2048
+
+# TripleSumm architecture
+input_dim: 128
+hidden_dim: 192
+num_layers: 2
+num_mst_layers: 2
+num_cmf_layers: 2
+num_heads: 4
+dropout: 0.3
+window_size: [5, 15, 45, 0]
+max_seq_len: 1000
+
+# Training
+epochs: 100
+lr: 1.19e-4
+weight_decay: 1.0e-5
+optimizer: adamw
+scheduler: cosine
+warmup_ratio: 0.1
+patience: 15
+accumulate_grad_batches: 2
+precision: 16
+gradient_clip_val: 0.01

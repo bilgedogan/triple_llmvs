@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 import pandas as pd
+
 class TVSumLLaMADataset(Dataset):
 
     def __init__(self, mode, split_idx, llama_embedding='llama_emb/tvsum_sum/'):
@@ -16,6 +17,8 @@ class TVSumLLaMADataset(Dataset):
         self.video_data = h5py.File(self.dataset, 'r')
         self.llama_emb_userprompt = h5py.File(self.userprompt, 'r')
         self.llama_emb_generation = h5py.File(self.generation, 'r')
+        self.visual_data = h5py.File('clip_features/tvsum_clip.h5', 'r')
+        self.audio_data = h5py.File('audio_features/tvsum_whisper.h5', 'r')
 
         with open(self.split_file, 'r') as f:
             self.data = json.loads(f.read())
@@ -23,7 +26,6 @@ class TVSumLLaMADataset(Dataset):
 
 
     def __len__(self):
-        """ Function to be called for the `len` operator of `VideoData` Dataset. """
         self.len = len(self.data[self.mode+'_keys'])
         return self.len
 
@@ -31,11 +33,12 @@ class TVSumLLaMADataset(Dataset):
         video_name = self.data[self.mode + '_keys'][index]
         d = {}
         d['video_name'] = video_name
-
         d['features'] = torch.Tensor(np.array(self.video_data[video_name + '/features']))
         d['gtscore'] = torch.as_tensor(np.array(self.video_data[video_name + '/gtscore']))
         d['llama_embedding_userprompt'] = torch.as_tensor(np.array(self.llama_emb_userprompt[str(video_name)]))
         d['llama_embedding_generation'] = torch.as_tensor(np.array(self.llama_emb_generation[str(video_name)]))
+        d['visual_feat'] = torch.Tensor(self.visual_data[video_name]['features'][...])
+        d['audio_feat'] = torch.Tensor(self.audio_data[video_name]['features'][...])
 
         if self.mode != 'train':
             d['n_frames'] = torch.as_tensor(np.array(self.video_data[video_name + '/n_frames']))
@@ -43,13 +46,15 @@ class TVSumLLaMADataset(Dataset):
             d['change_points'] = torch.as_tensor(np.array(self.video_data[video_name + '/change_points']))
             d['n_frame_per_seg'] = torch.as_tensor(np.array(self.video_data[video_name + '/n_frame_per_seg']))
             d['gt_summary'] = torch.as_tensor(np.array(self.video_data[video_name + '/user_summary']))
-        
+
         return d
-    
+
 
 class TrainBatchCollator(object):
     def __call__(self, batch):
-        video_name, video_filename, features, gtscore, llama_embedding_userprompt, llama_embedding_generation = [],[],[],[],[],[]
+        video_name, features, gtscore = [], [], []
+        llama_embedding_userprompt, llama_embedding_generation = [], []
+        visual_feat, audio_feat = [], []
 
         try:
             for data in batch:
@@ -58,6 +63,8 @@ class TrainBatchCollator(object):
                 gtscore.append(data['gtscore'])
                 llama_embedding_userprompt.append(data['llama_embedding_userprompt'])
                 llama_embedding_generation.append(data['llama_embedding_generation'])
+                visual_feat.append(data['visual_feat'])
+                audio_feat.append(data['audio_feat'])
         except:
             print('Error in batch collator')
 
@@ -68,14 +75,22 @@ class TrainBatchCollator(object):
         gtscore = pad_sequence(gtscore, batch_first=True)
         llama_embedding_userprompt = pad_sequence(llama_embedding_userprompt, batch_first=True)
         llama_embedding_generation = pad_sequence(llama_embedding_generation, batch_first=True)
-        
-        batch_data = {'video_name' : video_name,  'features' : frame_feat, 'gtscore':gtscore, 'mask':mask,
-                      'llama_embedding_userprompt':llama_embedding_userprompt, 'llama_embedding_generation':llama_embedding_generation}
+        visual_feat = pad_sequence(visual_feat, batch_first=True)
+        audio_feat = pad_sequence(audio_feat, batch_first=True)
+
+        batch_data = {
+            'video_name': video_name, 'features': frame_feat, 'gtscore': gtscore, 'mask': mask,
+            'llama_embedding_userprompt': llama_embedding_userprompt,
+            'llama_embedding_generation': llama_embedding_generation,
+            'visual_feat': visual_feat, 'audio_feat': audio_feat,
+        }
         return batch_data
-    
+
 class ValBatchCollator(object):
     def __call__(self, batch):
-        video_name, video_filename, features, gtscore, llama_embedding_userprompt, llama_embedding_generation = [],[],[],[],[],[]
+        video_name, features, gtscore = [], [], []
+        llama_embedding_userprompt, llama_embedding_generation = [], []
+        visual_feat, audio_feat = [], []
         cps, nseg, n_frames, picks, gt_summary = [], [], [], [], []
 
         try:
@@ -85,6 +100,8 @@ class ValBatchCollator(object):
                 gtscore.append(data['gtscore'])
                 llama_embedding_userprompt.append(data['llama_embedding_userprompt'])
                 llama_embedding_generation.append(data['llama_embedding_generation'])
+                visual_feat.append(data['visual_feat'])
+                audio_feat.append(data['audio_feat'])
                 cps.append(data['change_points'])
                 nseg.append(data['n_frame_per_seg'])
                 n_frames.append(data['n_frames'])
@@ -100,10 +117,15 @@ class ValBatchCollator(object):
         gtscore = pad_sequence(gtscore, batch_first=True)
         llama_embedding_userprompt = pad_sequence(llama_embedding_userprompt, batch_first=True)
         llama_embedding_generation = pad_sequence(llama_embedding_generation, batch_first=True)
+        visual_feat = pad_sequence(visual_feat, batch_first=True)
+        audio_feat = pad_sequence(audio_feat, batch_first=True)
 
-
-        batch_data = {'video_name' : video_name, 'features' : frame_feat, 'gtscore':gtscore, 'mask':mask,
-                      'llama_embedding_userprompt':llama_embedding_userprompt, 'llama_embedding_generation':llama_embedding_generation,
-                      'n_frames': n_frames, 'picks': picks, 'n_frame_per_seg': nseg, 'change_points': cps, 
-                      'gt_summary': gt_summary}
+        batch_data = {
+            'video_name': video_name, 'features': frame_feat, 'gtscore': gtscore, 'mask': mask,
+            'llama_embedding_userprompt': llama_embedding_userprompt,
+            'llama_embedding_generation': llama_embedding_generation,
+            'visual_feat': visual_feat, 'audio_feat': audio_feat,
+            'n_frames': n_frames, 'picks': picks, 'n_frame_per_seg': nseg,
+            'change_points': cps, 'gt_summary': gt_summary,
+        }
         return batch_data
