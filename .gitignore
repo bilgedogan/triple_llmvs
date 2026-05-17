@@ -4,3 +4,6 @@ Summaries/
 llama_emb/
 SumMe/
 TVSum/
+logs/
+audio_features/
+clip_features/
