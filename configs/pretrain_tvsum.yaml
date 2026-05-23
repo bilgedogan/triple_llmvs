@@ -1,0 +1,16 @@
+# Phase 2 — TVSum
+exp_name: mm_pretrain_tvsum_v1
+dataset: tvsum
+splits: [0, 1, 2, 3, 4]
+cuda_devices: "0"
+
+epochs: 200
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+lr: 7.0e-5
+num_workers: 4
+
+llama_root: llama_emb/tvsum_sum
+clip_path: clip_features/tvsum_clip.h5
+audio_path: audio_features/tvsum_whisper.h5

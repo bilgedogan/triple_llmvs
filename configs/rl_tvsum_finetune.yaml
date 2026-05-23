@@ -1,0 +1,35 @@
+# Phase 3 — TVSum
+exp_name: mm_rl_tvsum_v1
+dataset: tvsum
+splits: [0,1,2,3,4]
+cuda_devices: "0"
+
+epochs: 200
+episodes_per_update: 8
+ppo_epochs: 4
+clip: 0.2
+lr: 3.0e-4
+grad_clip: 0.5
+smoothness_coef: 0.05
+diversity_coef: 0.1
+entropy_coef: 0.01
+value_coef: 0.5
+aux_mse_coef: 0.1
+eval_every: 1
+
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+num_workers: 2
+
+joint_finetune: true
+lora_rank: 8
+lora_alpha: 16
+lora_lr: 3.0e-5
+rl_lr_joint: 1.0e-4
+
+llama_root: llama_emb/tvsum_sum
+clip_path: clip_features/tvsum_clip.h5
+audio_path: audio_features/tvsum_whisper.h5
+
+pretrained_aggregator: Summaries/mm_pretrain_tvsum_v1/tvsum/tvsum_split{split}/best_tau_model/last.ckpt

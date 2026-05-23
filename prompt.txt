@@ -1,0 +1,111 @@
+**System Role:** You are an expert Machine Learning Engineer specialising in Multi-modal Video Summarization, Reinforcement Learning (PPO), and the LLMVS architecture (CVPR 2025).
+
+**Objective:** Extend the existing LLMVS codebase with an RL-augmented dynamic modality fusion module. The integration point is strictly the Global Context Aggregator. Text features (`txt_t`, 2048d) are already extracted and saved at `llama_emb/{dataset}/`. Visual features (1042d) and audio features (512d) are already extracted and saved as `.h5` files. The LLaVA captioning and Llama-2 sliding window pipeline are completely untouched. You are training an RL agent to assign per-frame modality importance weights, computing a weighted fused sequence, and feeding it into the existing aggregator architecture in place of the original text-only sequence.
+
+**Constraint:** Do not modify anything upstream of the Global Context Aggregator. The only change to the LLMVS forward pass is replacing the text-only input sequence with the RL-weighted multimodal fused sequence.
+
+---
+
+### Phase 1 — Projection Setup
+
+Create `projections.py`. All features are already on disk. No extraction is needed. Define the following projection layers — these are the only new learnable parameters outside the RL agent.
+
+**Fusion projections** (output goes into the weighted fusion `f_t`, must match the aggregator's `reduced_dim=2048`):
+
+- Visual: `Linear(1042, 2048)` + LayerNorm. L2-normalise output.
+- Audio: `Linear(512, 2048)` + LayerNorm. L2-normalise output.
+- Text: already 2048d — identity, no projection.
+
+**Compression projections** (output goes into RL state construction and LSTM input only — separate parameters from fusion projections):
+
+- Visual: `Linear(1042, 256)`
+- Audio: `Linear(512, 256)`
+- Text: `Linear(2048, 256)`
+
+All projection layers are initialised with Kaiming uniform. Fusion projections are frozen during Phase 2 aggregator pretraining and unfrozen during Phase 3 RL training. Compression projections are only trained during Phase 3.
+
+---
+
+### Phase 2 — Supervised Pretraining of the Global Context Aggregator
+
+Create `pretrain_aggregator.py`. **Do not load the original LLMVS pretrained aggregator weights.** The original weights were conditioned on text-only input. Loading them here will produce a misaligned initialisation. Train the aggregator from scratch on multimodal fused input.
+
+**Input construction:** For every frame t, apply fusion projections to get `v_t_fused` (1042→2048) and `a_t_fused` (512→2048), then compute the equally-weighted fusion: `f_t = (1/3)*v_t_fused + (1/3)*txt_t + (1/3)*a_t_fused`. Fusion projections are frozen with random init during this phase — only aggregator weights are trained.
+
+**Network:** Pass the full sequence `F = [f_1, ..., f_T]` through the LLMVS Self-Attention aggregator using the same architecture as the original codebase: `num_heads=2`, `num_layers=3`, `reduced_dim=2048`. Pass an attention mask to handle variable-length videos — pad sequences to the batch maximum length and mask padded positions in all attention operations.
+
+**Loss:** MSE between the aggregator's output scores and the ground truth continuous importance scores. Use the same train/val splits as the original LLMVS experiments.
+
+**Training:** AdamW, lr=7e-5, 200 epochs, same schedule as original LLMVS. Save the best checkpoint by Kendall-τ on the validation split. This checkpoint is loaded as the frozen scorer in Phase 3.
+
+---
+
+### Phase 3 — RL Training Loop (PPO)
+
+Create `train_rl.py`. One episode equals one video. The aggregator weights from Phase 2 are frozen throughout this phase.
+
+**Data loading:** At the start of each episode, load `v_t` (1042d), `txt_t` (2048d), `a_t` (512d) for all T frames. Sample in-context learning examples once per episode and hold them fixed for the entire rollout.
+
+**Per-frame step t:**
+
+Apply compression projections: `v_t_small = CompProj_v(v_t)` (1042→256), `a_t_small = CompProj_a(a_t)` (512→256), `txt_t_small = CompProj_txt(txt_t)` (2048→256).
+
+Construct state: `s_t = [v_t_small ‖ txt_t_small ‖ a_t_small ‖ h_{t-1} ‖ t/T ‖ ||v_t||, ||txt_t||, ||a_t||]`. Dimension: 256+256+256+256+1+3 = 1028d. Project to 512d with a linear layer.
+
+**Actor:** MLP taking 512d state, outputting three concentration parameters. Apply `softplus(output) + 1e-4` as the final activation to enforce strict positivity and prevent the Dirichlet from becoming undefined. Initialise the final linear layer with small weights (std=0.01) so initial α values start close to 1, giving a near-uniform distribution before learning. Sample `w_t ~ Dirichlet(alpha)` where `w_t = [w_v, w_txt, w_a]`. Store `log π(w_t | s_t)`.
+
+**Critic:** Separate MLP taking 512d state, outputting a scalar `V(s_t)`. Store value estimates for GAE.
+
+**LSTM update:** `h_t = LSTM(Concat(v_t_small, txt_t_small, a_t_small), h_{t-1})`. Input dimension 768d (3×256), hidden dimension 256d. Initialise `h_0 = zeros` at the start of each episode.
+
+**Weighted fusion:** Apply fusion projections: `v_t_fused = FusionProj_v(v_t)` (1042→2048), `a_t_fused = FusionProj_a(a_t)` (512→2048). Then: `f_t = w_v * v_t_fused + w_txt * txt_t + w_a * a_t_fused`. Collect into `F_fused = [f_1, ..., f_T]`.
+
+Collect smoothness reward for this step: `r3_t = -||w_t - w_{t-1}||^2`. This is the only per-step reward — it is genuinely computable at each frame without needing the full sequence.
+
+Move to frame t+1.
+
+**End of episode:**
+
+Pass `F_fused` through the frozen aggregator with attention mask to get `predicted_scores`.
+
+Primary sparse reward: `r1 = Kendall-τ(predicted_scores, GT_scores)`.
+
+Diversity reward: `r2 = -mean_pairwise_cosine_similarity` over the visual features `v_t` of the top 15% scoring frames. Scale by 0.1.
+
+Total return for frame t: `G_t = r1 + 0.1*r2 + 0.05 * sum(r3_{t'} for t' >= t)`.
+
+**Advantage estimation:** GAE with γ=1.0, λ=0.95: `delta_t = r_t + V(s_{t+1}) - V(s_t)`. Normalise advantages across the episode before the PPO update.
+
+**PPO update:**
+
+Collect 8–16 episodes per minibatch. Compute probability ratio `r = π(w_t|s_t) / π_old(w_t|s_t)`.
+
+Policy loss: `L_pol = -mean[ min(r * A_t, clip(r, 0.8, 1.2) * A_t) ]`
+
+Value loss: `L_val = mean[ (V(s_t) - G_t)^2 ]`
+
+Entropy loss: `L_ent = -mean[ H[Dirichlet(alpha_t)] ]` using `torch.distributions.Dirichlet.entropy()`.
+
+Total: `L = L_pol + 0.5*L_val - 0.01*L_ent`
+
+Backpropagate through actor, critic, LSTM, and all projection layers only. Aggregator weights remain frozen. Clip gradients to norm 0.5. Adam lr=3e-4. Run 4 PPO epochs per minibatch before collecting new episodes.
+
+---
+
+### Phase 4 — Optional Joint Fine-Tuning
+
+Add a `--joint_finetune` flag to `train_rl.py`. When enabled, apply LoRA (rank=8, alpha=16) to the aggregator's Q, K, V, and output projection matrices. Do not fully unfreeze the aggregator — RL gradient variance is too high for stable full fine-tuning. Keep base aggregator weights frozen and train only the LoRA delta weights alongside the actor, critic, LSTM, and all projection layers. Use lr=3e-5 for LoRA parameters and lr=1e-4 for all RL components. Run this phase only after Phase 3 PPO has converged.
+
+---
+
+### Phase 5 — Inference
+
+Create `test_rl.py` mirroring the structure of the existing LLMVS `test.py`.
+
+**Deterministic fusion:** Replace Dirichlet sampling with the mode: `w_t = alpha / sum(alpha)`. No stochasticity at test time.
+
+**Forward pass:** Load `v_t`, `txt_t`, `a_t`. Run compression projections, LSTM, and actor sequentially over all T frames to get per-frame deterministic weights. Apply fusion projections. Compute `F_fused`. Pass through the aggregator (with LoRA weights merged if joint fine-tuning was run) with attention mask to get `scores`.
+
+**Summary generation:** Apply KTS to the raw visual features `v_t` (1042d, not fused features) to detect shot boundaries — KTS is a visual segmentation algorithm and must operate on unimodal visual features for clean boundary detection. Average predicted scores within each shot. Run 0/1 knapsack to select highest-scoring shots subject to total selected duration ≤ 15% of video length. Report F1 against GT summaries using the same evaluation protocol as the original LLMVS codebase.
+
+**Variable-length handling throughout all phases:** All batch operations must pass attention masks derived from actual sequence lengths. Padded positions must not contribute to loss, advantage estimates, or reward computation. Use the existing LLMVS dataloader's length-handling logic as the template.

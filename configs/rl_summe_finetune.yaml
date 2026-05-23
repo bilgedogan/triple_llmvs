@@ -1,0 +1,39 @@
+# Phase 3 (RL/PPO) — SumMe. Set pretrained_aggregator per split below or
+# override via CLI. The {split} placeholder is substituted by run_rl.sh.
+exp_name: mm_rl_summe_v1
+dataset: summe
+splits: [0,1,2,3,4]
+cuda_devices: "0"
+
+epochs: 200                  # PPO outer iterations
+episodes_per_update: 8
+ppo_epochs: 4
+clip: 0.2
+lr: 3.0e-4
+grad_clip: 0.5
+smoothness_coef: 0.05
+diversity_coef: 0.1
+entropy_coef: 0.01
+value_coef: 0.5
+aux_mse_coef: 0.1
+eval_every: 1
+
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+num_workers: 2
+
+# Phase 4 (optional LoRA fine-tuning). Toggle with `joint_finetune: true`.
+joint_finetune: true
+lora_rank: 8
+lora_alpha: 16
+lora_lr: 3.0e-5
+rl_lr_joint: 1.0e-4
+
+llama_root: llama_emb/summe_sum
+clip_path: clip_features/summe_clip.h5
+audio_path: audio_features/summe_whisper.h5
+
+# Path to the Phase 2 checkpoint. {split} is replaced with split_idx by the
+# launcher. Use best_tau_model/<filename>.ckpt produced by pretrain.
+pretrained_aggregator: Summaries/mm_pretrain_summe_v1/summe/summe_split{split}/best_tau_model/last.ckpt

@@ -49,13 +49,14 @@ def generate_summary(ypred, cps, n_frames, nfps, positions, proportion=0.15, met
     # print("len(nfps)", len(nfps))
     picks = knapSack(limits, nfps, seg_score, len(nfps))
 
-    summary = torch.zeros((1), dtype=torch.float32, device='cuda') # this element should be deleted
+    device = ypred.device if torch.is_tensor(ypred) else torch.device('cpu')
+    summary = torch.zeros((1), dtype=torch.float32, device=device) # this element should be deleted
     for seg_idx in range(n_segs):
         nf = nfps[seg_idx]
         if seg_idx in picks:
-            tmp = torch.ones((nf), dtype=torch.float32, device='cuda')
+            tmp = torch.ones((nf), dtype=torch.float32, device=device)
         else:
-            tmp = torch.zeros((nf), dtype=torch.float32, device='cuda')
+            tmp = torch.zeros((nf), dtype=torch.float32, device=device)
         summary = torch.cat((summary, tmp))
 
     summary = summary[1:] # delete the first element
