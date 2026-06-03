@@ -1,6 +1,16 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 03/06/2026                                  *
+* Version: 2.2.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - Different rl train scenarios are added.         *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 23/05/2026                                  *
 * Version: 2.1.0                                    *
 * Branch: rl_modality.                              *

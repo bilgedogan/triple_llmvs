@@ -24,7 +24,7 @@ class Config(object):
         else:
             self.device = torch.device("cpu")
         print ("Device being used:", self.device)
-
+#        self.device = torch.device("cpu")
         for k, v in kwargs.items():
             setattr(self, k, v)
 

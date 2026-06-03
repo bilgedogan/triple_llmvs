@@ -1,6 +1,6 @@
 # Phase 3 (RL/PPO) — SumMe. Set pretrained_aggregator per split below or
 # override via CLI. The {split} placeholder is substituted by run_rl.sh.
-exp_name: mm_rl_summe_finetune
+exp_name: mm_rl_summe_finetune_v2
 dataset: summe
 splits: [0,1,2,3,4]
 cuda_devices: "0"
@@ -25,10 +25,10 @@ num_workers: 2
 
 # Phase 4 (optional LoRA fine-tuning). Toggle with `joint_finetune: true`.
 joint_finetune: true
-lora_rank: 8
-lora_alpha: 16
+lora_rank: 4
+lora_alpha: 8
 lora_lr: 3.0e-5
-rl_lr_joint: 1.0e-4
+rl_lr_joint: 3.0e-4
 
 llama_root: llama_emb/summe_sum
 clip_path: clip_features/summe_clip.h5

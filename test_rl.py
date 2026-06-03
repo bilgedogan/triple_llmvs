@@ -114,10 +114,11 @@ def _eval_split(opt, split_idx, weights_path, device, text_encoder):
     ).to(device)
     agent = RLAgent().to(device)
 
-    if opt.joint_finetune:
+    ckpt = torch.load(weights_path, map_location='cpu')
+    has_lora = any('parametrizations' in k for k in ckpt['aggregator'].keys())
+    if has_lora:
         apply_lora_to_aggregator(aggregator, rank=opt.lora_rank, alpha=opt.lora_alpha)
 
-    ckpt = torch.load(weights_path, map_location='cpu')
     agent.load_state_dict(ckpt['agent'])
     fusion.load_state_dict(ckpt['fusion'])
     comp.load_state_dict(ckpt['comp'])
