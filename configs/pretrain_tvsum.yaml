@@ -1,5 +1,5 @@
 # Phase 2 — TVSum
-exp_name: mm_pretrain_tvsum_v1
+exp_name: mm_pretrain_tvsum_v2
 dataset: tvsum
 splits: [0, 1, 2, 3, 4]
 cuda_devices: "0"

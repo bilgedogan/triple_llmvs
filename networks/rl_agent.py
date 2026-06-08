@@ -28,6 +28,7 @@ class Actor(nn.Module):
     Final layer uses small-std init so initial alphas ≈ 1 (uniform prior)."""
 
     def __init__(self, in_dim=STATE_DIM, hidden=256, num_modalities=3, final_std=0.01):
+        # başlangıçta tüm modelitelerin eşit ağırlıklı olması için alpha=1 olmalıdır. Bunu için final_std çok küçük tutulur.
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden),
@@ -43,6 +44,8 @@ class Actor(nn.Module):
         h = self.net(state)
         raw = self.head(h)
         alpha = F.softplus(raw) + 1e-4
+        # alpha'yı kafese al: uçlara kaçarsa Dirichlet entropisi patlar (loss'u bozar).
+        alpha = alpha.clamp(min=0.1, max=20.0)
         return alpha
 
 
@@ -74,6 +77,7 @@ class RLAgent(nn.Module):
         self.lstm_hidden_dim = lstm_hidden_dim
 
     def init_state(self, device):
+        # LSTM in her yeni video için hidden state ve cell state sıfırlanır
         h0 = torch.zeros(1, self.lstm_hidden_dim, device=device)
         c0 = torch.zeros(1, self.lstm_hidden_dim, device=device)
         return h0, c0

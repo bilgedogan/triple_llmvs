@@ -73,7 +73,7 @@ if __name__ == '__main__':
         dataset=opt.dataset, mode='test', split_idx=opt.split_idx,
         llama_root=opt.llama_root, clip_path=opt.clip_path, audio_path=opt.audio_path,
     )
-    train_loader = DataLoader(train_ds, batch_size=1, shuffle=True,
+    train_loader = DataLoader(train_ds, batch_size=1, shuffle=False,
                               num_workers=opt.num_workers, collate_fn=MultimodalTrainCollator(),
                               pin_memory=True, persistent_workers=opt.num_workers > 0)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False,

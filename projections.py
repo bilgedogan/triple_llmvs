@@ -17,23 +17,25 @@ def _kaiming(linear):
 
 
 class TextEncoder(nn.Module):
-    """Deterministic txt_t extractor: cat(user_prompt, gen) along token dim,
-    channel-pool to 5120, then AdaptiveMaxPool1d to 2048. No learnable params,
-    matching the prompt's 'text already 2048d, identity' contract."""
+    """Txt_t extractor matching the original LLMVS: cat(user_prompt, gen) along token dim,
+    channel-pool to 5120, then nn.Linear(5120, out_dim) followed by LayerNorm(out_dim)."""
 
     def __init__(self, out_dim=FUSED_DIM):
         super().__init__()
         self.token_pool = nn.AdaptiveMaxPool1d(1)
-        self.dim_pool = nn.AdaptiveMaxPool1d(out_dim)
+        self.linear = nn.Linear(5120, out_dim)
+        self.norm = nn.LayerNorm(out_dim)
         self.out_dim = out_dim
+        _kaiming(self.linear)
 
     def forward(self, llama_user, llama_gen):
         # inputs: (T, tokens, 5120) each. cat → (T, 2*tokens, 5120)
         x = torch.cat((llama_user, llama_gen), dim=1)
         # channel-pool over tokens: (T, 5120, 2*tokens) → (T, 5120, 1) → (T, 5120)
         x = self.token_pool(x.permute(0, 2, 1)).squeeze(-1)
-        # dim-pool 5120 → out_dim
-        x = self.dim_pool(x.unsqueeze(1)).squeeze(1)
+        # linear projection + norm: 5120 → out_dim
+        x = self.linear(x)
+        x = self.norm(x)
         return x
 
 

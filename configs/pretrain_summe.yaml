@@ -1,7 +1,7 @@
 # Phase 2 (multimodal aggregator pretrain) — SumMe
 # Results land under Summaries/<exp_name>/<dataset>/<tag>/
 # tag defaults to "{dataset}_split{split_idx}" so 5-fold runs do not collide.
-exp_name: mm_pretrain_summe_v1
+exp_name: mm_pretrain_summe_v2
 dataset: summe
 splits: [0, 1, 2, 3, 4]     # consumed by scripts/run_pretrain.sh
 cuda_devices: "0"            # consumed by the shell wrapper

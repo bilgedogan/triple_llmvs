@@ -69,6 +69,8 @@ def _gae(rewards, values, gamma=1.0, lam=0.95):
     gae = 0.0
     for t in reversed(range(T)):
         next_v = 0.0 if t == T - 1 else values[t + 1].item()
+        # temporal diff error: how much better is the reward at this step than expected
+        # values is the critic's prediction, rewards is the actual current reward, next rewrd ecpected by critic, gamma discount factor
         delta = rewards[t].item() + gamma * next_v - values[t].item()
         gae = delta + gamma * lam * gae
         advantages[t] = gae
@@ -169,7 +171,7 @@ def run_rollout(agent, fusion, comp, entry, device, fixed_weights=None):
     )
 
 
-def compute_rewards(rollout, aggregator, entry, device, smoothness_coef, diversity_coef):
+def compute_rewards(rollout, aggregator, entry, device, smoothness_coef, diversity_coef, correlation_coef=0.7):
     F_fused = rollout['F_fused']
     T = rollout['T']
     mask = torch.ones(1, T, dtype=torch.bool, device=device)
@@ -179,8 +181,21 @@ def compute_rewards(rollout, aggregator, entry, device, smoothness_coef, diversi
     r1 = _kendall_tau(scores, gt)
     r2 = _diversity_reward(entry['pool5'].to(device), scores).item()
 
-    rewards = smoothness_coef * rollout['smooth_rewards'].detach().clone()
-    rewards[-1] = rewards[-1] + r1 + diversity_coef * r2
+    # Map raw smoothness [-2.0, 0.0] -> [-1.0, 0.0]
+    smooth_raw = rollout['smooth_rewards'].detach().clone()
+    smooth_mapped = smooth_raw / 2.0
+
+    # Map raw diversity [-1.0, 0.0] -> [-1.0, 1.0]
+    r2_mapped = 2.0 * r2 + 1.0
+
+    # Correlation is already in [-1.0, 1.0]
+    r1_mapped = r1
+
+    # Dense step-wise reward (normalized by sequence length T)
+    rewards = (smoothness_coef * smooth_mapped) / T
+
+    # Add sparse terminal rewards at the final step
+    rewards[-1] = rewards[-1] + correlation_coef * r1_mapped + diversity_coef * r2_mapped
     return rewards, dict(r1=r1, r2=r2, ktau=r1, scores=scores)
 
 
@@ -249,8 +264,9 @@ def main():
     parser.add_argument('--lora_rank', type=int, default=8)
     parser.add_argument('--lora_alpha', type=int, default=16)
     parser.add_argument('--num_workers', type=int, default=2)
-    parser.add_argument('--smoothness_coef', type=float, default=0.05)
+    parser.add_argument('--smoothness_coef', type=float, default=0.2)
     parser.add_argument('--diversity_coef', type=float, default=0.1)
+    parser.add_argument('--correlation_coef', type=float, default=0.7)
     parser.add_argument('--entropy_coef', type=float, default=0.01)
     parser.add_argument('--value_coef', type=float, default=0.5)
     parser.add_argument('--aux_mse_coef', type=float, default=0.1,
@@ -303,9 +319,12 @@ def main():
     state = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
     agg_state = {k.replace('aggregator.', '', 1): v for k, v in state.items() if k.startswith('aggregator.')}
     fusion_state = {k.replace('fusion.', '', 1): v for k, v in state.items() if k.startswith('fusion.')}
+    text_encoder_state = {k.replace('text_encoder.', '', 1): v for k, v in state.items() if k.startswith('text_encoder.')}
     miss, unex = aggregator.load_state_dict(agg_state, strict=False)
     if fusion_state:
         fusion.load_state_dict(fusion_state, strict=False)
+    if text_encoder_state:
+        text_encoder.load_state_dict(text_encoder_state, strict=False)
     print(f'[load] aggregator missing={len(miss)} unexpected={len(unex)}')
 
     for p in aggregator.parameters():
@@ -359,7 +378,9 @@ def main():
                 roll = run_rollout(agent, fusion, comp, entry, device)
                 rewards, metrics = compute_rewards(
                     roll, aggregator, entry, device,
-                    smoothness_coef=opt.smoothness_coef, diversity_coef=opt.diversity_coef,
+                    smoothness_coef=opt.smoothness_coef,
+                    diversity_coef=opt.diversity_coef,
+                    correlation_coef=opt.correlation_coef,
                 )
                 adv, ret = _gae(rewards, roll['values'])
             # Normalise advantage per-episode (small T means batch-wide normalisation is noisy).
@@ -422,6 +443,7 @@ def main():
                     'fusion': fusion.state_dict(),
                     'comp': comp.state_dict(),
                     'aggregator': aggregator.state_dict(),
+                    'text_encoder': text_encoder.state_dict(),
                     'iter': it, 'val_tau': tau, 'val_rho': rho,
                     'opt': vars(opt),
                 }, path)

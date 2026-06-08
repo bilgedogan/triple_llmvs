@@ -1,0 +1,18 @@
+# Phase 2 test — SumMe pretrain aggregator (equal-weight fusion, no RL agent).
+# {split} substituted by run_test_pretrain.sh / test_pretrain.py.
+exp_name: mm_pretrain_summe_v2
+dataset: summe
+splits: [0, 1, 2, 3, 4]
+cuda_devices: "0"
+
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+num_workers: 2
+
+llama_root: llama_emb/summe_sum
+clip_path: clip_features/summe_clip.h5
+audio_path: audio_features/summe_whisper.h5
+
+# best_tau_model/last.ckpt — swap to best_rho_model or a glob if needed.
+weights: Summaries/mm_pretrain_summe_v2/summe/summe_split{split}/best_tau_model/last.ckpt

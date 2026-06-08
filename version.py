@@ -1,6 +1,20 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 08/06/2026                                  *
+* Version: 2.3.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - Testing pretrain scripts are added.             *
+* - Text encoder dim reduction changed into maxpool *
+*   and linear layer.                               *
+* - Loss and reward normalization.                  *
+* - Fusion network is trained during pretraining.   *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 03/06/2026                                  *
 * Version: 2.2.0                                    *
 * Branch: rl_modality                               *

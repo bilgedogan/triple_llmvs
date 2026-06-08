@@ -66,8 +66,9 @@ class PretrainPLModule(pl.LightningModule):
         self.config = config
         self.text_encoder = TextEncoder(out_dim=config.reduced_dim)
         self.fusion = FusionProjections(out_dim=config.reduced_dim)
-        for p in self.fusion.parameters():
-            p.requires_grad_(False)
+        # in phase 2 pretrain, we now train fusion projections alongside the aggregator:
+        # for p in self.fusion.parameters():
+        #     p.requires_grad_(False)
         self.aggregator = MultimodalAggregator(
             reduced_dim=config.reduced_dim,
             num_heads=config.num_heads,

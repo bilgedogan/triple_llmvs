@@ -1,0 +1,46 @@
+# Phase 3 + Phase 4 (LoRA joint fine-tune) — SumMe.
+# Coefs aligned to the new mapped-reward scheme:
+#   terminal: correlation_coef*tau + diversity_coef*(2*r2+1)   (both ~[-1,1])
+#   dense:    smoothness_coef*(smooth/2)/T                      (~[-coef,0])
+# SumMe is small (~20 vids/split): keep rl_lr_joint low + lora_rank high
+# to avoid regression (see CLAUDE.md tuning notes).
+exp_name: mm_rl_summe_finetune_v4
+dataset: summe
+splits: [0,1,2,3,4]
+cuda_devices: "0"
+
+epochs: 200
+episodes_per_update: 8
+ppo_epochs: 4
+clip: 0.2
+lr: 1.5e-4
+grad_clip: 0.5
+
+# reward coefs
+correlation_coef: 0.7
+diversity_coef: 0.1
+smoothness_coef: 0.2
+
+# loss coefs
+entropy_coef: 0.01
+value_coef: 0.5
+aux_mse_coef: 2.0            # higher anchor on small split for stability
+eval_every: 1
+
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+num_workers: 2
+
+# Phase 4 enabled.
+joint_finetune: true
+lora_rank: 16
+lora_alpha: 32
+lora_lr: 1.0e-5
+rl_lr_joint: 5.0e-5
+
+llama_root: llama_emb/summe_sum
+clip_path: clip_features/summe_clip.h5
+audio_path: audio_features/summe_whisper.h5
+
+pretrained_aggregator: Summaries/mm_pretrain_summe_v2/summe/summe_split{split}/best_tau_model/last.ckpt
