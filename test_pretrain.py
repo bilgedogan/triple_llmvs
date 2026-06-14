@@ -55,22 +55,33 @@ def _split_state_dict(state_dict, prefix):
     return {k[n:]: v for k, v in state_dict.items() if k.startswith(prefix + '.')}
 
 
-def pretrain_scores(fusion, text_encoder, aggregator, batch, device):
-    """Forward pass: equal-weight fusion → frozen aggregator → frame scores."""
-    lu = batch['llama_user'][0].to(device)
-    lg = batch['llama_gen'][0].to(device)
-    txt = text_encoder(lu, lg)
-    v = batch['visual'][0].to(device)
-    a = batch['audio'][0].to(device)
-    T = v.shape[0]
+def pretrain_scores(fusion, text_encoder, aggregator, batch, device, fusion_mode='equal'):
+    """Forward pass matching _build_fused and _eval_one in PretrainPLModule."""
+    v = batch['visual'].to(device)
+    a = batch['audio'].to(device)
+    llama_user = batch['llama_user'].to(device)
+    llama_gen = batch['llama_gen'].to(device)
+    mask = batch['mask'].to(device)
 
-    v_f = fusion.project_visual(v)
-    a_f = fusion.project_audio(a)
-    txt_f = fusion.project_text(txt)
-    F_fused = equal_weight_fuse(v_f, txt_f, a_f).unsqueeze(0)
-    mask = torch.ones(1, T, dtype=torch.bool, device=device)
-    scores = aggregator(F_fused, mask=mask).squeeze(0).clamp(0.0, 1.0)
-    return scores
+    B, T = v.shape[:2]
+    lu = llama_user.reshape(B * T, llama_user.shape[2], llama_user.shape[3])
+    lg = llama_gen.reshape(B * T, llama_gen.shape[2], llama_gen.shape[3])
+
+    with torch.cuda.amp.autocast():
+        txt = text_encoder(lu, lg).reshape(B, T, -1)
+
+        if fusion_mode == 'text_only':
+            F_fused = txt
+        else:
+            v_fused = fusion.project_visual(v)
+            a_fused = fusion.project_audio(a)
+            txt_fused = fusion.project_text(txt)
+            F_fused = equal_weight_fuse(v_fused, txt_fused, a_fused)
+
+        scores = aggregator(F_fused, mask=None).clamp(0.0, 1.0)
+    
+    score = scores[0][mask[0]]
+    return score
 
 
 def _f1_per_video(machine_summary, gt_summary, dataset):
@@ -120,7 +131,10 @@ def _eval_split(opt, split_idx, weights_path, device):
     summary_size = 0.15
     with torch.no_grad():
         for batch in test_loader:
-            scores = pretrain_scores(fusion, text_encoder, aggregator, batch, device)
+            scores = pretrain_scores(
+                fusion, text_encoder, aggregator, batch, device,
+                fusion_mode=getattr(opt, 'fusion_mode', 'equal')
+            )
             cps = batch['change_points'][0]
             n_frames = batch['n_frames'][0]
             nfps = batch['n_frame_per_seg'][0].tolist()
@@ -162,6 +176,7 @@ def main():
                              'Defaults to Summaries/<exp_name>/<dataset>.')
     parser.add_argument('--result_file', type=str, default='results_pretrain.txt')
     parser.add_argument('--num_workers', type=int, default=2)
+    parser.add_argument('--fusion_mode', type=str, default='equal', choices=['equal', 'text_only'])
     opt = parser.parse_args()
     apply_yaml(parser, opt, opt.config)
 

@@ -13,6 +13,7 @@ num_workers: 2
 llama_root: llama_emb/tvsum_sum
 clip_path: clip_features/tvsum_clip.h5
 audio_path: audio_features/tvsum_whisper.h5
+fusion_mode: "text_only"
 
 # best_tau_model/last.ckpt — swap to best_rho_model or a glob if needed.
-weights: Summaries/mm_pretrain_tvsum_v2/tvsum/tvsum_split{split}/best_tau_model/last.ckpt
+weights: Summaries/mm_pretrain_tvsum_v2/tvsum/tvsum_split{split}/best_tau_model/epoch*.ckpt

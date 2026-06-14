@@ -18,6 +18,7 @@ from projections import FusionProjections, TextEncoder, CompressionProjections
 from networks.multimodal_aggregator import MultimodalAggregator
 from networks.rl_agent import RLAgent
 from networks.lora import apply_lora_to_aggregator
+from utils.visualize import f1_per_video, plot_metric_box, plot_score_comparison
 
 seed_everything(1112)
 
@@ -55,46 +56,27 @@ def deterministic_scores(agent, fusion, comp, text_encoder, aggregator, batch, d
     """Forward pass at test time: deterministic Dirichlet mode → fused → scores."""
     lu = batch['llama_user'][0].to(device)
     lg = batch['llama_gen'][0].to(device)
-    txt = text_encoder(lu, lg)
     v = batch['visual'][0].to(device)
     a = batch['audio'][0].to(device)
     T = v.shape[0]
 
-    h, c = agent.init_state(device)
-    fused = []
-    for t in range(T):
-        v_t = v[t:t + 1]; a_t = a[t:t + 1]; txt_t = txt[t:t + 1]
-        v_s, txt_s, a_s = comp(v_t, txt_t, a_t)
-        norms_t = torch.stack([v[t].norm(), txt[t].norm(), a[t].norm()])
-        t_norm = torch.tensor(t / max(T - 1, 1), device=device, dtype=v.dtype)
-        alpha, _v, h, c, _ = agent.step(v_s, txt_s, a_s, h, c, t_norm, norms_t)
-        w = alpha / alpha.sum(dim=-1, keepdim=True)
-        v_f = fusion.project_visual(v_t); a_f = fusion.project_audio(a_t); txt_f = fusion.project_text(txt_t)
-        f_t = w[:, 0:1] * v_f + w[:, 1:2] * txt_f + w[:, 2:3] * a_f
-        fused.append(f_t.squeeze(0))
-    F_fused = torch.stack(fused, dim=0).unsqueeze(0)
-    mask = torch.ones(1, T, dtype=torch.bool, device=device)
-    scores = aggregator(F_fused, mask=mask).squeeze(0).clamp(0.0, 1.0)
-    return scores
-
-
-def _f1_per_video(machine_summary, gt_summary, dataset):
-    """SumMe: max over user summaries. TVSum: mean over user summaries."""
-    pred = machine_summary.detach().cpu().float()
-    gts = gt_summary.detach().cpu().float()
-    L = min(pred.shape[0], gts.shape[1])
-    pred = pred[:L]; gts = gts[:, :L]
-    f1_per = []
-    for u in range(gts.shape[0]):
-        tp = (pred * gts[u]).sum().item()
-        pp = pred.sum().item(); pg = gts[u].sum().item()
-        if pp == 0 or pg == 0:
-            f1_per.append(0.0); continue
-        prec = tp / pp; rec = tp / pg
-        f1_per.append(2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0)
-    if not f1_per:
-        return 0.0
-    return float(np.mean(f1_per)) if dataset == 'tvsum' else float(np.max(f1_per))
+    with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+        txt = text_encoder(lu, lg)
+        h, c = agent.init_state(device)
+        fused = []
+        for t in range(T):
+            v_t = v[t:t + 1]; a_t = a[t:t + 1]; txt_t = txt[t:t + 1]
+            v_s, txt_s, a_s = comp(v_t, txt_t, a_t)
+            norms_t = torch.stack([v[t].norm(), txt[t].norm(), a[t].norm()])
+            t_norm = torch.tensor(t / max(T - 1, 1), device=device, dtype=v.dtype)
+            alpha, _v, h, c, _ = agent.step(v_s, txt_s, a_s, h, c, t_norm, norms_t)
+            w = alpha / alpha.sum(dim=-1, keepdim=True)
+            v_f = fusion.project_visual(v_t); a_f = fusion.project_audio(a_t); txt_f = fusion.project_text(txt_t)
+            f_t = w[:, 0:1] * v_f + w[:, 1:2] * txt_f + w[:, 2:3] * a_f
+            fused.append(f_t.squeeze(0))
+        F_fused = torch.stack(fused, dim=0).unsqueeze(0)
+        scores = aggregator(F_fused, mask=None).squeeze(0).clamp(0.0, 1.0)
+    return scores.float()
 
 
 def _eval_split(opt, split_idx, weights_path, device, text_encoder):
@@ -129,8 +111,11 @@ def _eval_split(opt, split_idx, weights_path, device, text_encoder):
 
     taus, rhos, f1s = [], [], []
     summary_size = 0.15
+    plot_dir = os.path.join(opt.result_dir, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    n_plot = getattr(opt, 'plot_videos', 2)
     with torch.no_grad():
-        for batch in test_loader:
+        for vi, batch in enumerate(test_loader):
             scores = deterministic_scores(agent, fusion, comp, text_encoder, aggregator, batch, device)
             cps = batch['change_points'][0]
             n_frames = batch['n_frames'][0]
@@ -145,8 +130,17 @@ def _eval_split(opt, split_idx, weights_path, device, text_encoder):
                 machine_summary, gt_summary, video_name, scores, eval_data=opt.dataset,
             )
             taus.append(float(kTau)); rhos.append(float(sRho))
-            f1s.append(_f1_per_video(machine_summary, gt_summary, opt.dataset))
+            f1s.append(f1_per_video(machine_summary, gt_summary, opt.dataset))
+            # Predicted vs GT frame importance for first n_plot videos of the split.
+            if vi < n_plot:
+                pred = scores.detach().cpu().numpy()
+                gt = batch['gtscore'][0].detach().cpu().numpy()
+                plot_score_comparison(video_name, pred, gt, plot_dir,
+                                      tag=f'split{split_idx}')
 
+    per_video = dict(tau=taus, rho=rhos, f1=f1s)
+    plot_metric_box(per_video, plot_dir, fname=f'metric_box_split{split_idx}.png',
+                    title=f'test per-video metrics (split {split_idx})')
     return float(np.mean(taus)), float(np.mean(rhos)), float(np.mean(f1s))
 
 
@@ -176,6 +170,8 @@ def main():
                         help='Where results.txt is written. '
                              'Defaults to Summaries/<exp_name>/<dataset>.')
     parser.add_argument('--result_file', type=str, default='results.txt')
+    parser.add_argument('--plot_videos', type=int, default=2,
+                        help='Per split, plot predicted vs GT scores for the first N test videos.')
     parser.add_argument('--num_workers', type=int, default=2)
     opt = parser.parse_args()
     apply_yaml(parser, opt, opt.config)

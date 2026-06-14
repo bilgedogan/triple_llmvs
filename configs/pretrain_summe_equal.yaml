@@ -1,0 +1,19 @@
+# Phase 2 (multimodal aggregator pretrain) — SumMe
+# Results land under Summaries/<exp_name>/<dataset>/<tag>/
+# tag defaults to "{dataset}_split{split_idx}" so 5-fold runs do not collide.
+exp_name: mm_pretrain_summe_equal
+dataset: summe
+splits: [0, 1, 2, 3, 4]     # consumed by scripts/run_pretrain.sh
+cuda_devices: "0"            # consumed by the shell wrapper
+
+epochs: 200
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+lr: 1.19e-4
+num_workers: 4
+fusion_mode: "equal"
+
+llama_root: llama_emb/summe_sum
+clip_path: clip_features/summe_clip.h5
+audio_path: audio_features/summe_whisper.h5

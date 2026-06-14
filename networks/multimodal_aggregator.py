@@ -86,6 +86,8 @@ class PretrainPLModule(pl.LightningModule):
         lu = llama_user.reshape(B * T, llama_user.shape[2], llama_user.shape[3])
         lg = llama_gen.reshape(B * T, llama_gen.shape[2], llama_gen.shape[3])
         txt = self.text_encoder(lu, lg).reshape(B, T, -1)
+        if self.config.fusion_mode == 'text_only':
+            return txt
         v_fused = self.fusion.project_visual(v)
         a_fused = self.fusion.project_audio(a)
         txt_fused = self.fusion.project_text(txt)
@@ -94,17 +96,20 @@ class PretrainPLModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         mask = batch['mask'].to(self.device)
         fused = self._build_fused(batch)
-        scores = self.aggregator(fused, mask=mask).clamp(0.0, 1.0)
+        # scores = self.aggregator(fused, mask=mask).clamp(0.0, 1.0)
+        scores = self.aggregator(fused, mask=None).clamp(0.0, 1.0)
         gt = batch['gtscore']
-        loss_per = self.criterion(scores, gt)
-        loss = (loss_per * mask.float()).sum() / mask.float().sum().clamp_min(1.0)
+#        loss_per = self.criterion(scores, gt)
+#        loss = (loss_per * mask.float()).sum() / mask.float().sum().clamp_min(1.0)
+        loss = self.criterion(scores, gt).mean()
         self.log('train_loss', loss, on_step=True, on_epoch=True, batch_size=fused.shape[0])
         return loss
 
     def _eval_one(self, batch, bidx):
         mask = batch['mask'].to(self.device)
         fused = self._build_fused(batch)
-        scores = self.aggregator(fused, mask=mask).clamp(0.0, 1.0)
+        # scores = self.aggregator(fused, mask=mask).clamp(0.0, 1.0)
+        scores = self.aggregator(fused, mask=None).clamp(0.0, 1.0)
         # Only batch size 1 for val/test (variable-length cross-validation).
         score = scores[bidx][mask[bidx]]
         cps = batch['change_points'][bidx]
@@ -138,7 +143,7 @@ class PretrainPLModule(pl.LightningModule):
         trainable = [p for p in self.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(trainable, lr=self.config.lr)
         scheduler = {
-            'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.config.epochs, eta_min=1e-6),
+            'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-6),
             'interval': 'epoch',
             'frequency': 1,
         }

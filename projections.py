@@ -54,15 +54,18 @@ class FusionProjections(nn.Module):
 
     def project_visual(self, v):
         x = self.visual_ln(self.visual(v))
-        return F.normalize(x, dim=-1)
+        # return F.normalize(x, dim=-1)
+        return x
 
     def project_audio(self, a):
         x = self.audio_ln(self.audio(a))
-        return F.normalize(x, dim=-1)
+        # return F.normalize(x, dim=-1)
+        return x
 
     def project_text(self, txt):
         # txt already 2048d, L2-normalise to keep modalities on equal footing.
-        return F.normalize(txt, dim=-1)
+        # return F.normalize(txt, dim=-1)
+        return txt
 
     def forward(self, v, txt, a):
         return self.project_visual(v), self.project_text(txt), self.project_audio(a)

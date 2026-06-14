@@ -1,4 +1,6 @@
 import argparse
+import csv
+import glob
 import os
 import time
 
@@ -25,6 +27,9 @@ from projections import (
 from networks.multimodal_aggregator import MultimodalAggregator
 from networks.rl_agent import RLAgent
 from networks.lora import apply_lora_to_aggregator, lora_parameters
+from utils.visualize import (
+    f1_per_video, plot_training_curves, plot_loss_curves, plot_metric_box,
+)
 
 
 seed_everything(1112)
@@ -51,6 +56,15 @@ def _kendall_tau(pred, gt):
         return 0.0
     tau, _ = stats.kendalltau(stats.rankdata(-p), stats.rankdata(-g))
     return float(tau) if not np.isnan(tau) else 0.0
+
+
+def _spearman(pred, gt):
+    p = pred.detach().cpu().numpy()
+    g = gt.detach().cpu().numpy()
+    if np.std(p) < 1e-8 or np.std(g) < 1e-8:
+        return 0.0
+    rho, _ = stats.spearmanr(p, g)
+    return float(rho) if not np.isnan(rho) else 0.0
 
 
 def _diversity_reward(visual, scores, top_frac=0.15):
@@ -196,13 +210,14 @@ def compute_rewards(rollout, aggregator, entry, device, smoothness_coef, diversi
 
     # Add sparse terminal rewards at the final step
     rewards[-1] = rewards[-1] + correlation_coef * r1_mapped + diversity_coef * r2_mapped
-    return rewards, dict(r1=r1, r2=r2, ktau=r1, scores=scores)
+    srho = _spearman(scores, gt)
+    return rewards, dict(r1=r1, r2=r2, ktau=r1, srho=srho, scores=scores)
 
 
 def evaluate(agent, fusion, comp, text_encoder, aggregator, val_loader, device, dataset_name):
     agent.eval(); fusion.eval(); comp.eval(); aggregator.eval()
     cache = FeatureCache()
-    taus, rhos = [], []
+    taus, rhos, f1s = [], [], []
     with torch.no_grad():
         for batch in val_loader:
             entry = cache.get(batch, text_encoder, device)
@@ -230,8 +245,10 @@ def evaluate(agent, fusion, comp, text_encoder, aggregator, val_loader, device, 
             machine_summary = generate_summary(scores, cps, n_frames.unsqueeze(0), nfps, picks)
             kTau, sRho = evaluate_summary(machine_summary, gt_summary, video_name, scores, eval_data=dataset_name)
             taus.append(float(kTau)); rhos.append(float(sRho))
+            f1s.append(f1_per_video(machine_summary, gt_summary, dataset_name))
     agent.train(); fusion.train(); comp.train()
-    return float(np.mean(taus)), float(np.mean(rhos))
+    per_video = dict(tau=taus, rho=rhos, f1=f1s)
+    return float(np.mean(taus)), float(np.mean(rhos)), float(np.mean(f1s)), per_video
 
 
 def main():
@@ -353,6 +370,17 @@ def main():
     best_rho = -1e9
     save_dir = config.save_dir_root
     os.makedirs(save_dir, exist_ok=True)
+    history = dict(
+        iter=[], train_tau=[], train_rho=[], val_tau=[], val_rho=[], val_f1=[],
+        loss_iter=[], pol=[], val=[], ent=[], aux=[],
+        best_tau=-1e9, best_rho=-1e9,
+    )
+    csv_path = os.path.join(save_dir, 'train_log.csv')
+    with open(csv_path, 'w', newline='') as f:
+        csv.writer(f).writerow([
+            'iter', 'train_tau', 'train_rho', 'val_tau', 'val_rho', 'val_f1',
+            'pol', 'val_loss', 'ent', 'aux',
+        ])
 
     train_iter = iter(train_loader)
 
@@ -371,6 +399,7 @@ def main():
         # Phase A: collect rollouts (no grad on critic/actor — store data only).
         episodes = []
         train_taus = []
+        train_rhos = []
         for _ in range(opt.episodes_per_update):
             batch = next_batch()
             entry = cache.get(batch, text_encoder, device)
@@ -393,6 +422,7 @@ def main():
                 returns=ret.detach(),
             ))
             train_taus.append(metrics['ktau'])
+            train_rhos.append(metrics['srho'])
 
         # Phase B: PPO update — re-roll each epoch so encoder/LSTM/projections receive gradient.
         total_pol, total_val, total_ent, total_aux = 0.0, 0.0, 0.0, 0.0
@@ -428,14 +458,36 @@ def main():
 
         denom = max(opt.ppo_epochs * len(episodes), 1)
         dt = time.time() - t0
-        print(f'[iter {it:04d}] train_kTau={np.mean(train_taus):.4f} '
-              f'pol={total_pol/denom:.4f} val={total_val/denom:.4f} '
-              f'ent={total_ent/denom:.4f} aux={total_aux/denom:.4f} ({dt:.1f}s)')
+        train_tau_mean = float(np.mean(train_taus))
+        train_rho_mean = float(np.mean(train_rhos))
+        pol_m = total_pol / denom; val_m = total_val / denom
+        ent_m = total_ent / denom; aux_m = total_aux / denom
+        # Loss components every iter — learning curves to spot divergence/plateau.
+        history['loss_iter'].append(it)
+        history['pol'].append(pol_m); history['val'].append(val_m)
+        history['ent'].append(ent_m); history['aux'].append(aux_m)
+        print(f'[iter {it:04d}] train_kTau={train_tau_mean:.4f} train_sRho={train_rho_mean:.4f} '
+              f'pol={pol_m:.4f} val={val_m:.4f} ent={ent_m:.4f} aux={aux_m:.4f} ({dt:.1f}s)')
 
         if (it + 1) % opt.eval_every == 0:
-            val_tau, val_rho = evaluate(agent, fusion, comp, text_encoder, aggregator,
-                                        val_loader, device, opt.dataset)
-            print(f'[iter {it:04d}] VAL kTau={val_tau:.4f} sRho={val_rho:.4f}')
+            val_tau, val_rho, val_f1, per_video = evaluate(
+                agent, fusion, comp, text_encoder, aggregator,
+                val_loader, device, opt.dataset)
+            print(f'[iter {it:04d}] VAL kTau={val_tau:.4f} sRho={val_rho:.4f} F1={val_f1:.4f}')
+
+            # Record history + log for overfit diagnosis (train rising while val flat/drops).
+            history['iter'].append(it)
+            history['train_tau'].append(train_tau_mean)
+            history['train_rho'].append(train_rho_mean)
+            history['val_tau'].append(val_tau)
+            history['val_rho'].append(val_rho)
+            history['val_f1'].append(val_f1)
+            with open(csv_path, 'a', newline='') as f:
+                csv.writer(f).writerow([
+                    it, f'{train_tau_mean:.6f}', f'{train_rho_mean:.6f}',
+                    f'{val_tau:.6f}', f'{val_rho:.6f}', f'{val_f1:.6f}',
+                    f'{pol_m:.6f}', f'{val_m:.6f}', f'{ent_m:.6f}', f'{aux_m:.6f}',
+                ])
 
             def _save(path, tau, rho):
                 torch.save({
@@ -444,16 +496,32 @@ def main():
                     'comp': comp.state_dict(),
                     'aggregator': aggregator.state_dict(),
                     'text_encoder': text_encoder.state_dict(),
-                    'iter': it, 'val_tau': tau, 'val_rho': rho,
+                    'iter': it, 'val_tau': tau, 'val_rho': rho, 'val_f1': val_f1,
                     'opt': vars(opt),
                 }, path)
 
+            # Save best with iter + score in filename. Test loader globs best_{metric}*.pt.
+            # Old named-best removed so only current best remains (glob stays unambiguous).
+            def _save_best(metric, score, val_tau, val_rho):
+                named = os.path.join(save_dir, f'best_{metric}_iter{it:04d}_{metric}{score:.4f}.pt')
+                for old in glob.glob(os.path.join(save_dir, f'best_{metric}_iter*.pt')):
+                    os.remove(old)
+                _save(named, val_tau, val_rho)
+
             if val_tau > best_tau:
                 best_tau = val_tau
-                _save(os.path.join(save_dir, 'best_tau.pt'), val_tau, val_rho)
+                history['best_tau'] = best_tau
+                _save_best('tau', val_tau, val_tau, val_rho)
+                # Box plot of per-video spread at the best-tau checkpoint.
+                plot_metric_box(per_video, save_dir,
+                                title=f'val per-video metrics (iter {it})')
             if val_rho > best_rho:
                 best_rho = val_rho
-                _save(os.path.join(save_dir, 'best_rho.pt'), val_tau, val_rho)
+                history['best_rho'] = best_rho
+                _save_best('rho', val_rho, val_tau, val_rho)
+
+            plot_training_curves(history, save_dir)
+            plot_loss_curves(history, save_dir)
 
 
 if __name__ == '__main__':

@@ -1,6 +1,18 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 14/06/2026                                  *
+* Version: 2.4.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - Pretrain pipeline equalled with train.py        *
+* - Testing pipeline equalled with test.py          *
+* - Box plots were added for per video metrics.     *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 08/06/2026                                  *
 * Version: 2.3.0                                    *
 * Branch: rl_modality                               *

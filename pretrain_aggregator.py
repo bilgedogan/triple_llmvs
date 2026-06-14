@@ -49,6 +49,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_path', type=str, default=None)
     parser.add_argument('--audio_path', type=str, default=None)
     parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--fusion_mode', type=str, default='equal', choices=['equal', 'text_only'])
     opt = parser.parse_args()
     apply_yaml(parser, opt, opt.config)
 
