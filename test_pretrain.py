@@ -129,12 +129,18 @@ def _eval_split(opt, split_idx, weights_path, device):
 
     taus, rhos, f1s = [], [], []
     summary_size = 0.15
+    use_amp = (device.type == 'cuda')
     with torch.no_grad():
         for batch in test_loader:
-            scores = pretrain_scores(
-                fusion, text_encoder, aggregator, batch, device,
-                fusion_mode=getattr(opt, 'fusion_mode', 'equal')
-            )
+            # Match training-time validation: PL ran precision=16, so val_kTau/val_sRho
+            # in the ckpt filename were computed under fp16 autocast. Reproduce it here
+            # or fp32 re-eval drifts lower (knapsack flips on small score deltas).
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                scores = pretrain_scores(
+                    fusion, text_encoder, aggregator, batch, device,
+                    fusion_mode=getattr(opt, 'fusion_mode', 'equal')
+                )
+            scores = scores.float()
             cps = batch['change_points'][0]
             n_frames = batch['n_frames'][0]
             nfps = batch['n_frame_per_seg'][0].tolist()

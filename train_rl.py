@@ -77,19 +77,15 @@ def _diversity_reward(visual, scores, top_frac=0.15):
     return -sim[mask].mean()  # higher = more diverse
 
 
-def _gae(rewards, values, gamma=1.0, lam=0.95):
+def _returns(rewards, gamma=1.0):
+    """Discounted reward-to-go G_t = sum_{k>=t} gamma^{k-t} r_k. No baseline."""
     T = len(rewards)
-    advantages = torch.zeros(T, device=rewards.device)
-    gae = 0.0
+    returns = torch.zeros(T, device=rewards.device)
+    running = 0.0
     for t in reversed(range(T)):
-        next_v = 0.0 if t == T - 1 else values[t + 1].item()
-        # temporal diff error: how much better is the reward at this step than expected
-        # values is the critic's prediction, rewards is the actual current reward, next rewrd ecpected by critic, gamma discount factor
-        delta = rewards[t].item() + gamma * next_v - values[t].item()
-        gae = delta + gamma * lam * gae
-        advantages[t] = gae
-    returns = advantages + values.detach()
-    return advantages, returns
+        running = rewards[t].item() + gamma * running
+        returns[t] = running
+    return returns
 
 
 class FeatureCache:
@@ -115,17 +111,12 @@ class FeatureCache:
         return self.cache[name]
 
 
-def run_rollout(agent, fusion, comp, entry, device, fixed_weights=None):
-    """Single-episode forward through compression → LSTM → actor → critic and
-    optionally weighted fusion → fused sequence.
-
-    When ``fixed_weights`` is provided (T, 3), use those weights instead of
-    sampling — used during PPO re-rolls to keep actions consistent while
-    refreshing gradients.
+def run_rollout(agent, fusion, comp, entry, device):
+    """Single-episode forward through compression → LSTM → actor → sampled
+    modality weights → weighted fusion → fused sequence.
 
     Returns dict with tensors (gradient-enabled where appropriate):
-        alphas (T,3), values (T,), log_probs (T,), weights (T,3),
-        F_fused (1,T,2048), smooth_rewards (T,)
+        alphas (T,3), log_probs (T,), F_fused (1,T,2048), smooth_rewards (T,)
     """
     v = entry['visual'].to(device)
     a = entry['audio'].to(device)
@@ -137,7 +128,7 @@ def run_rollout(agent, fusion, comp, entry, device, fixed_weights=None):
     a_norms = a.norm(dim=-1)
 
     h, c = agent.init_state(device)
-    alphas, values, log_probs, weights_out, fused = [], [], [], [], []
+    alphas, log_probs, fused = [], [], []
     smooth = []
     prev_w = None
 
@@ -148,14 +139,11 @@ def run_rollout(agent, fusion, comp, entry, device, fixed_weights=None):
         v_small, txt_small, a_small = comp(v_t, txt_t, a_t)
         norms_t = torch.stack([v_norms[t], txt_norms[t], a_norms[t]])
         t_norm = torch.tensor(t / max(T - 1, 1), device=device, dtype=v.dtype)
-        alpha, value, h, c, _state = agent.step(
+        alpha, _value, h, c, _state = agent.step(
             v_small, txt_small, a_small, h, c, t_norm, norms_t,
         )
         dist = Dirichlet(alpha)
-        if fixed_weights is None:
-            w = dist.rsample()
-        else:
-            w = fixed_weights[t].unsqueeze(0)
+        w = dist.rsample()
         log_prob = dist.log_prob(w)
 
         v_fused = fusion.project_visual(v_t)
@@ -164,9 +152,7 @@ def run_rollout(agent, fusion, comp, entry, device, fixed_weights=None):
         f_t = w[:, 0:1] * v_fused + w[:, 1:2] * txt_fused + w[:, 2:3] * a_fused
 
         alphas.append(alpha.squeeze(0))
-        values.append(value.squeeze(0))
         log_probs.append(log_prob.squeeze(0))
-        weights_out.append(w.squeeze(0))
         fused.append(f_t.squeeze(0))
         if prev_w is None:
             smooth.append(torch.zeros((), device=device))
@@ -176,9 +162,7 @@ def run_rollout(agent, fusion, comp, entry, device, fixed_weights=None):
 
     return dict(
         alphas=torch.stack(alphas, dim=0),
-        values=torch.stack(values, dim=0),
         log_probs=torch.stack(log_probs, dim=0),
-        weights=torch.stack(weights_out, dim=0),
         F_fused=torch.stack(fused, dim=0).unsqueeze(0),
         smooth_rewards=torch.stack(smooth, dim=0),
         T=T,
@@ -190,7 +174,7 @@ def compute_rewards(rollout, aggregator, entry, device, smoothness_coef, diversi
     T = rollout['T']
     mask = torch.ones(1, T, dtype=torch.bool, device=device)
     with torch.no_grad():
-        scores = aggregator(F_fused, mask=mask).squeeze(0).clamp(0.0, 1.0)
+        scores = aggregator(F_fused, mask=None).squeeze(0).clamp(0.0, 1.0)
     gt = entry['gtscore'].to(device)
     r1 = _kendall_tau(scores, gt)
     r2 = _diversity_reward(entry['pool5'].to(device), scores).item()
@@ -215,7 +199,7 @@ def compute_rewards(rollout, aggregator, entry, device, smoothness_coef, diversi
 
 
 def evaluate(agent, fusion, comp, text_encoder, aggregator, val_loader, device, dataset_name):
-    agent.eval(); fusion.eval(); comp.eval(); aggregator.eval()
+    agent.eval(); comp.eval(); aggregator.eval()
     cache = FeatureCache()
     taus, rhos, f1s = [], [], []
     with torch.no_grad():
@@ -238,7 +222,7 @@ def evaluate(agent, fusion, comp, text_encoder, aggregator, val_loader, device, 
                 fused.append((w[:,0:1]*v_f + w[:,1:2]*txt_f + w[:,2:3]*a_f).squeeze(0))
             F_fused = torch.stack(fused, dim=0).unsqueeze(0)
             mask = torch.ones(1, T, dtype=torch.bool, device=device)
-            scores = aggregator(F_fused, mask=mask).squeeze(0).clamp(0.0, 1.0)
+            scores = aggregator(F_fused, mask=None).squeeze(0).clamp(0.0, 1.0)
             cps = batch['change_points'][0]; n_frames = batch['n_frames'][0]
             nfps = batch['n_frame_per_seg'][0].tolist(); picks = batch['picks'][0]
             gt_summary = batch['gt_summary'][0]; video_name = batch['video_name'][0]
@@ -246,7 +230,7 @@ def evaluate(agent, fusion, comp, text_encoder, aggregator, val_loader, device, 
             kTau, sRho = evaluate_summary(machine_summary, gt_summary, video_name, scores, eval_data=dataset_name)
             taus.append(float(kTau)); rhos.append(float(sRho))
             f1s.append(f1_per_video(machine_summary, gt_summary, dataset_name))
-    agent.train(); fusion.train(); comp.train()
+    agent.train(); comp.train()
     per_video = dict(tau=taus, rho=rhos, f1=f1s)
     return float(np.mean(taus)), float(np.mean(rhos)), float(np.mean(f1s)), per_video
 
@@ -259,10 +243,8 @@ def main():
     parser.add_argument('--model', type=str, default=None, help='Deprecated alias for --exp_name')
     parser.add_argument('--dataset', type=str, default='summe')
     parser.add_argument('--split_idx', type=int, default=0)
-    parser.add_argument('--epochs', type=int, default=200, help='PPO outer iterations')
-    parser.add_argument('--episodes_per_update', type=int, default=8)
-    parser.add_argument('--ppo_epochs', type=int, default=4)
-    parser.add_argument('--clip', type=float, default=0.2)
+    parser.add_argument('--epochs', type=int, default=200, help='REINFORCE outer iterations')
+    parser.add_argument('--episodes_per_update', type=int, default=16)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--lora_lr', type=float, default=3e-5)
     parser.add_argument('--rl_lr_joint', type=float, default=1e-4)
@@ -284,11 +266,10 @@ def main():
     parser.add_argument('--smoothness_coef', type=float, default=0.2)
     parser.add_argument('--diversity_coef', type=float, default=0.1)
     parser.add_argument('--correlation_coef', type=float, default=0.7)
-    parser.add_argument('--entropy_coef', type=float, default=0.01)
-    parser.add_argument('--value_coef', type=float, default=0.5)
-    parser.add_argument('--aux_mse_coef', type=float, default=0.1,
+    parser.add_argument('--entropy_coef', type=float, default=0.05)
+    parser.add_argument('--aux_mse_coef', type=float, default=0.01,
                         help='Auxiliary MSE loss on aggregator scores — provides gradient '
-                             'to fusion projections and LoRA params during PPO updates')
+                             'to comp/agent and LoRA params during REINFORCE updates')
     parser.add_argument('--eval_every', type=int, default=1)
     opt = parser.parse_args()
     apply_yaml(parser, opt, opt.config)
@@ -348,6 +329,11 @@ def main():
         p.requires_grad_(False)
     aggregator.eval()
 
+    # Fusion frozen in RL — loaded from pretrain ckpt, no grad.
+    for p in fusion.parameters():
+        p.requires_grad_(False)
+    fusion.eval()
+
     lora_modules = None
     if opt.joint_finetune:
         lora_modules = apply_lora_to_aggregator(aggregator, rank=opt.lora_rank, alpha=opt.lora_alpha)
@@ -355,7 +341,7 @@ def main():
     else:
         rl_lr = opt.lr
 
-    rl_params = list(agent.parameters()) + list(fusion.parameters()) + list(comp.parameters())
+    rl_params = list(agent.parameters()) + list(comp.parameters())
     if lora_modules is not None:
         optimizer = torch.optim.Adam([
             {'params': rl_params, 'lr': rl_lr},
@@ -396,78 +382,75 @@ def main():
 
     for it in range(opt.epochs):
         t0 = time.time()
-        # Phase A: collect rollouts (no grad on critic/actor — store data only).
-        episodes = []
+        # REINFORCE with global baseline. Collection: rollout each episode
+        # (with grad), store its Monte-Carlo returns (gamma=1.0). Update: pool
+        # all step-returns across all episodes, mean = baseline; advantage =
+        # return - baseline; policy loss = -(log_prob * advantage).mean().
+        # No critic, no PPO ratio/clip, no re-roll.
         train_taus = []
         train_rhos = []
+        episodes = []
         for _ in range(opt.episodes_per_update):
             batch = next_batch()
             entry = cache.get(batch, text_encoder, device)
+            # Rollout WITH grad — log_probs/alphas/F_fused carry gradient.
+            roll = run_rollout(agent, fusion, comp, entry, device)
             with torch.no_grad():
-                roll = run_rollout(agent, fusion, comp, entry, device)
                 rewards, metrics = compute_rewards(
                     roll, aggregator, entry, device,
                     smoothness_coef=opt.smoothness_coef,
                     diversity_coef=opt.diversity_coef,
                     correlation_coef=opt.correlation_coef,
                 )
-                adv, ret = _gae(rewards, roll['values'])
-            # Normalise advantage per-episode (small T means batch-wide normalisation is noisy).
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-            episodes.append(dict(
-                entry=entry,
-                weights=roll['weights'].detach(),
-                old_log_probs=roll['log_probs'].detach(),
-                advantages=adv.detach(),
-                returns=ret.detach(),
-            ))
+            returns = _returns(rewards).detach()  # Monte-Carlo, gamma=1.0
+            episodes.append(dict(roll=roll, entry=entry, returns=returns))
             train_taus.append(metrics['ktau'])
             train_rhos.append(metrics['srho'])
 
-        # Phase B: PPO update — re-roll each epoch so encoder/LSTM/projections receive gradient.
-        total_pol, total_val, total_ent, total_aux = 0.0, 0.0, 0.0, 0.0
-        for _ in range(opt.ppo_epochs):
-            optimizer.zero_grad(set_to_none=True)
-            loss_total = 0.0
-            n_frames = 0
-            for ep in episodes:
-                entry = ep['entry']
-                roll = run_rollout(agent, fusion, comp, entry, device, fixed_weights=ep['weights'])
-                new_log_probs = roll['log_probs']
-                values = roll['values']
-                alphas = roll['alphas']
-                ratio = torch.exp(new_log_probs - ep['old_log_probs'])
-                clipped = torch.clamp(ratio, 1 - opt.clip, 1 + opt.clip)
-                pol = -torch.min(ratio * ep['advantages'], clipped * ep['advantages']).mean()
-                val = (values - ep['returns']).pow(2).mean()
-                ent = -Dirichlet(alphas).entropy().mean()
-                # Auxiliary differentiable supervision so fusion projections + LoRA learn.
-                T = roll['T']
-                mask = torch.ones(1, T, dtype=torch.bool, device=device)
-                scores = aggregator(roll['F_fused'], mask=mask).squeeze(0).clamp(0.0, 1.0)
-                aux = mse(scores, entry['gtscore'].to(device))
-                ep_loss = pol + opt.value_coef * val + opt.entropy_coef * ent + opt.aux_mse_coef * aux
-                ep_loss = ep_loss * T  # weight by length so longer videos count proportionally
-                loss_total = loss_total + ep_loss
-                n_frames += T
-                total_pol += pol.item(); total_val += val.item(); total_ent += ent.item(); total_aux += aux.item()
-            (loss_total / max(n_frames, 1)).backward()
-            params = [p for grp in optimizer.param_groups for p in grp['params']]
-            torch.nn.utils.clip_grad_norm_(params, opt.grad_clip)
-            optimizer.step()
+        # Global baseline = mean over every step-return of every episode.
+        baseline = torch.cat([ep['returns'] for ep in episodes]).mean()
+        # Per-episode total MC return (G_0) averaged — logged in CSV val_loss col.
+        mc_return_mean = float(np.mean([ep['returns'][0].item() for ep in episodes]))
 
-        denom = max(opt.ppo_epochs * len(episodes), 1)
+        optimizer.zero_grad(set_to_none=True)
+        total_pol, total_ent, total_aux = 0.0, 0.0, 0.0
+        loss_total = 0.0
+        n_frames = 0
+        for ep in episodes:
+            roll = ep['roll']
+            entry = ep['entry']
+            adv = (ep['returns'] - baseline).detach()
+            pol = -(roll['log_probs'] * adv).mean()
+            ent = -Dirichlet(roll['alphas']).entropy().mean()
+            # Auxiliary differentiable supervision so comp/agent + LoRA learn.
+            T = roll['T']
+            mask = torch.ones(1, T, dtype=torch.bool, device=device)
+            scores = aggregator(roll['F_fused'], mask=None).squeeze(0).clamp(0.0, 1.0)
+            aux = mse(scores, entry['gtscore'].to(device))
+            ep_loss = pol + opt.entropy_coef * ent + opt.aux_mse_coef * aux
+            ep_loss = ep_loss * T  # weight by length so longer videos count proportionally
+            loss_total = loss_total + ep_loss
+            n_frames += T
+            total_pol += pol.item(); total_ent += ent.item(); total_aux += aux.item()
+
+        (loss_total / max(n_frames, 1)).backward()
+        params = [p for grp in optimizer.param_groups for p in grp['params']]
+        torch.nn.utils.clip_grad_norm_(params, opt.grad_clip)
+        optimizer.step()
+
+        denom = max(len(train_taus), 1)
         dt = time.time() - t0
         train_tau_mean = float(np.mean(train_taus))
         train_rho_mean = float(np.mean(train_rhos))
-        pol_m = total_pol / denom; val_m = total_val / denom
+        pol_m = total_pol / denom; val_m = mc_return_mean
         ent_m = total_ent / denom; aux_m = total_aux / denom
         # Loss components every iter — learning curves to spot divergence/plateau.
+        # 'val' now holds mean per-episode Monte-Carlo return (no critic).
         history['loss_iter'].append(it)
         history['pol'].append(pol_m); history['val'].append(val_m)
         history['ent'].append(ent_m); history['aux'].append(aux_m)
         print(f'[iter {it:04d}] train_kTau={train_tau_mean:.4f} train_sRho={train_rho_mean:.4f} '
-              f'pol={pol_m:.4f} val={val_m:.4f} ent={ent_m:.4f} aux={aux_m:.4f} ({dt:.1f}s)')
+              f'pol={pol_m:.4f} mc_ret={val_m:.4f} ent={ent_m:.4f} aux={aux_m:.4f} ({dt:.1f}s)')
 
         if (it + 1) % opt.eval_every == 0:
             val_tau, val_rho, val_f1, per_video = evaluate(

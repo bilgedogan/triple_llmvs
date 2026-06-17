@@ -1,6 +1,17 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 17/06/2026                                  *
+* Version: 2.5.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - PPO converted to REINFORCE.                     *
+* - Fusion parameters freezed.                      *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 14/06/2026                                  *
 * Version: 2.4.0                                    *
 * Branch: rl_modality                               *

@@ -1,6 +1,6 @@
 # Phase 2 test — TVSum pretrain aggregator (equal-weight fusion, no RL agent).
 # {split} substituted by run_test_pretrain.sh / test_pretrain.py.
-exp_name: mm_pretrain_tvsum_v2
+exp_name: mm_pretrain_tvsum_equal
 dataset: tvsum
 splits: [0, 1, 2, 3, 4]
 cuda_devices: "0"
@@ -13,7 +13,7 @@ num_workers: 2
 llama_root: llama_emb/tvsum_sum
 clip_path: clip_features/tvsum_clip.h5
 audio_path: audio_features/tvsum_whisper.h5
-fusion_mode: "text_only"
+fusion_mode: "equal"
 
 # best_tau_model/last.ckpt — swap to best_rho_model or a glob if needed.
-weights: Summaries/mm_pretrain_tvsum_v2/tvsum/tvsum_split{split}/best_tau_model/epoch*.ckpt
+weights: Summaries/mm_pretrain_tvsum_equal/tvsum/tvsum_split{split}/best_tau_model/epoch*.ckpt

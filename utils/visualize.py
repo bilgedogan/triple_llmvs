@@ -61,18 +61,21 @@ def plot_training_curves(history, save_dir, fname='training_curves.png'):
 
 
 def plot_loss_curves(history, save_dir, fname='loss_curves.png'):
-    """PPO loss components over iters (policy / value / entropy / aux MSE)."""
+    """REINFORCE loss / return components over iters
+    (policy / MC return / entropy / aux MSE). 'val' holds the mean per-episode
+    Monte-Carlo return (no critic)."""
     its = history.get('loss_iter', [])
     if not its:
         return
+    labels = {'val': 'mc_return'}
     fig, ax = plt.subplots(figsize=(9, 5))
     for key, color in (('pol', 'tab:blue'), ('val', 'tab:orange'),
                        ('ent', 'tab:green'), ('aux', 'tab:red')):
         ys = history.get(key)
         if ys:
-            ax.plot(its, ys, color=color, label=key)
-    ax.set_xlabel('iter'); ax.set_ylabel('loss')
-    ax.set_title('PPO loss components')
+            ax.plot(its, ys, color=color, label=labels.get(key, key))
+    ax.set_xlabel('iter'); ax.set_ylabel('loss / return')
+    ax.set_title('REINFORCE loss components')
     ax.legend(fontsize=8); ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(save_dir, fname), dpi=120)
