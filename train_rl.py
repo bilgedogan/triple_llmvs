@@ -247,6 +247,7 @@ def main():
     parser.add_argument('--episodes_per_update', type=int, default=16)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--lora_lr', type=float, default=3e-5)
+    parser.add_argument('--head_lr', type=float, default=1e-4)
     parser.add_argument('--rl_lr_joint', type=float, default=1e-4)
     parser.add_argument('--grad_clip', type=float, default=0.5)
     parser.add_argument('--reduced_dim', type=int, default=2048)
@@ -335,18 +336,25 @@ def main():
     fusion.eval()
 
     lora_modules = None
+    head_params = None
     if opt.joint_finetune:
         lora_modules = apply_lora_to_aggregator(aggregator, rank=opt.lora_rank, alpha=opt.lora_alpha)
         rl_lr = opt.rl_lr_joint
+        # Unfreeze scoring head — aux MSE adapts it to RL modality weights.
+        for p in aggregator.mlp_head.parameters():
+            p.requires_grad_(True)
+        head_params = list(aggregator.mlp_head.parameters())
     else:
         rl_lr = opt.lr
 
     rl_params = list(agent.parameters()) + list(comp.parameters())
     if lora_modules is not None:
-        optimizer = torch.optim.Adam([
+        param_groups = [
             {'params': rl_params, 'lr': rl_lr},
             {'params': list(lora_parameters(lora_modules)), 'lr': opt.lora_lr},
-        ])
+            {'params': head_params, 'lr': opt.head_lr},
+        ]
+        optimizer = torch.optim.Adam(param_groups)
     else:
         optimizer = torch.optim.Adam(rl_params, lr=rl_lr)
 

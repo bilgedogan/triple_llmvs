@@ -1,6 +1,16 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 19/06/2026                                  *
+* Version: 2.6.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - MLP head finetuning is added.                   *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 17/06/2026                                  *
 * Version: 2.5.0                                    *
 * Branch: rl_modality                               *
