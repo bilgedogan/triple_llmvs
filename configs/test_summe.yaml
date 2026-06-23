@@ -1,5 +1,5 @@
 # Phase 5 — SumMe test. {split} substituted by run_test.sh.
-exp_name: mm_rl_summe_equal_finetune_v2
+exp_name: mm_rl_summe_equal_finetune_v4
 dataset: summe
 splits: [0, 1, 2, 3, 4]
 cuda_devices: "0"
@@ -10,11 +10,11 @@ num_layers: 3
 num_workers: 2
 
 joint_finetune: true        # set true if checkpoint produced with LoRA
-lora_rank: 8
-lora_alpha: 16
+lora_rank: 16
+lora_alpha: 32
 
 llama_root: llama_emb/summe_sum
 clip_path: clip_features/summe_clip.h5
 audio_path: audio_features/summe_whisper.h5
 
-weights: Summaries/mm_rl_summe_equal_finetune_v2/summe/summe_split{split}/best_tau*.pt
+weights: Summaries/mm_rl_summe_equal_finetune_v4/summe/summe_split{split}/best_tau*.pt

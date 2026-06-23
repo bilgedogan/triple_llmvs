@@ -1,5 +1,5 @@
 # Phase 5 — TVSum test.
-exp_name: mm_rl_tvsum_equal_finetune_v2
+exp_name: mm_rl_tvsum_equal_finetune_v4
 dataset: tvsum
 splits: [0, 1, 2, 3, 4]
 cuda_devices: "0"
@@ -17,4 +17,4 @@ llama_root: llama_emb/tvsum_sum
 clip_path: clip_features/tvsum_clip.h5
 audio_path: audio_features/tvsum_whisper.h5
 
-weights: Summaries/mm_rl_tvsum_equal_finetune_v2/tvsum/tvsum_split{split}/best_tau*.pt
+weights: Summaries/mm_rl_tvsum_equal_finetune_v4/tvsum/tvsum_split{split}/best_tau*.pt

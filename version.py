@@ -1,6 +1,17 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 23/06/2026                                  *
+* Version: 2.7.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - Dirichlet alpha clmap increased to 5-20.        *
+* - Tested on different learning rates.             *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 19/06/2026                                  *
 * Version: 2.6.0                                    *
 * Branch: rl_modality                               *
