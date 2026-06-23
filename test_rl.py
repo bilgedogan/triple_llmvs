@@ -66,12 +66,12 @@ def deterministic_scores(agent, fusion, comp, text_encoder, aggregator, batch, d
         fused = []
         for t in range(T):
             v_t = v[t:t + 1]; a_t = a[t:t + 1]; txt_t = txt[t:t + 1]
-            v_s, txt_s, a_s = comp(v_t, txt_t, a_t)
+            v_f = fusion.project_visual(v_t); a_f = fusion.project_audio(a_t); txt_f = fusion.project_text(txt_t)
+            v_s, txt_s, a_s = comp(v_f, txt_f, a_f)
             norms_t = torch.stack([v[t].norm(), txt[t].norm(), a[t].norm()])
             t_norm = torch.tensor(t / max(T - 1, 1), device=device, dtype=v.dtype)
             alpha, _v, h, c, _ = agent.step(v_s, txt_s, a_s, h, c, t_norm, norms_t)
             w = alpha / alpha.sum(dim=-1, keepdim=True)
-            v_f = fusion.project_visual(v_t); a_f = fusion.project_audio(a_t); txt_f = fusion.project_text(txt_t)
             f_t = w[:, 0:1] * v_f + w[:, 1:2] * txt_f + w[:, 2:3] * a_f
             fused.append(f_t.squeeze(0))
         F_fused = torch.stack(fused, dim=0).unsqueeze(0)

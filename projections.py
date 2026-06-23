@@ -74,7 +74,7 @@ class FusionProjections(nn.Module):
 class CompressionProjections(nn.Module):
     """RL state compression: each modality → 256d. Separate params from fusion."""
 
-    def __init__(self, visual_dim=VISUAL_DIM, audio_dim=AUDIO_DIM, text_dim=FUSED_DIM, out_dim=COMP_DIM):
+    def __init__(self, visual_dim=FUSED_DIM, audio_dim=FUSED_DIM, text_dim=FUSED_DIM, out_dim=COMP_DIM):
         super().__init__()
         self.visual = nn.Linear(visual_dim, out_dim)
         self.audio = nn.Linear(audio_dim, out_dim)

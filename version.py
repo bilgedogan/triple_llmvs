@@ -2,6 +2,18 @@
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
 * Date: 23/06/2026                                  *
+* Version: 2.8.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - Compression layer gets fusion inputs.           *
+* - Finetuning pipeline gets best pretraining model *
+*   not last checkpoint.                            *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
+* Date: 23/06/2026                                  *
 * Version: 2.7.0                                    *
 * Branch: rl_modality                               *
 * Development:                                      *

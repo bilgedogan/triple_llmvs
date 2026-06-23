@@ -136,7 +136,11 @@ def run_rollout(agent, fusion, comp, entry, device):
         v_t = v[t:t + 1]
         a_t = a[t:t + 1]
         txt_t = txt[t:t + 1]
-        v_small, txt_small, a_small = comp(v_t, txt_t, a_t)
+        v_fused = fusion.project_visual(v_t)
+        a_fused = fusion.project_audio(a_t)
+        txt_fused = fusion.project_text(txt_t)
+
+        v_small, txt_small, a_small = comp(v_fused.detach(), txt_fused.detach(), a_fused.detach())
         norms_t = torch.stack([v_norms[t], txt_norms[t], a_norms[t]])
         t_norm = torch.tensor(t / max(T - 1, 1), device=device, dtype=v.dtype)
         alpha, _value, h, c, _state = agent.step(
@@ -146,9 +150,7 @@ def run_rollout(agent, fusion, comp, entry, device):
         w = dist.rsample()
         log_prob = dist.log_prob(w)
 
-        v_fused = fusion.project_visual(v_t)
-        a_fused = fusion.project_audio(a_t)
-        txt_fused = fusion.project_text(txt_t)
+
         f_t = w[:, 0:1] * v_fused + w[:, 1:2] * txt_fused + w[:, 2:3] * a_fused
 
         alphas.append(alpha.squeeze(0))
@@ -213,12 +215,12 @@ def evaluate(agent, fusion, comp, text_encoder, aggregator, val_loader, device, 
             fused = []
             for t in range(T):
                 v_t = v[t:t+1]; a_t = a[t:t+1]; txt_t = txt[t:t+1]
-                v_s, txt_s, a_s = comp(v_t, txt_t, a_t)
+                v_f = fusion.project_visual(v_t); a_f = fusion.project_audio(a_t); txt_f = fusion.project_text(txt_t)
+                v_s, txt_s, a_s = comp(v_f, txt_f, a_f)
                 norms_t = torch.stack([v[t].norm(), txt[t].norm(), a[t].norm()])
                 t_norm = torch.tensor(t / max(T-1, 1), device=device, dtype=v.dtype)
                 alpha, _val, h, h_c, _state = agent.step(v_s, txt_s, a_s, h, h_c, t_norm, norms_t)
                 w = alpha / alpha.sum(dim=-1, keepdim=True)
-                v_f = fusion.project_visual(v_t); a_f = fusion.project_audio(a_t); txt_f = fusion.project_text(txt_t)
                 fused.append((w[:,0:1]*v_f + w[:,1:2]*txt_f + w[:,2:3]*a_f).squeeze(0))
             F_fused = torch.stack(fused, dim=0).unsqueeze(0)
             mask = torch.ones(1, T, dtype=torch.bool, device=device)
@@ -314,7 +316,13 @@ def main():
     ).to(device)
     agent = RLAgent().to(device)
 
-    ckpt = torch.load(opt.pretrained_aggregator, map_location='cpu')
+    agg_path = opt.pretrained_aggregator
+    if any(ch in agg_path for ch in '*?['):
+        matches = sorted(glob.glob(agg_path))
+        if not matches:
+            raise FileNotFoundError(f'No checkpoint matches pattern: {agg_path}')
+        agg_path = matches[0]
+    ckpt = torch.load(agg_path, map_location=device)
     state = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
     agg_state = {k.replace('aggregator.', '', 1): v for k, v in state.items() if k.startswith('aggregator.')}
     fusion_state = {k.replace('fusion.', '', 1): v for k, v in state.items() if k.startswith('fusion.')}
