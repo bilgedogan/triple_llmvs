@@ -15,24 +15,24 @@ parser.add_argument('--num_layers', type=int, default=3)
 
 
 args = parser.parse_args()
-args.model = args.result_dir.replace('Summaries/', '')
+args.model = args.result_dir.replace('Diffusion/', '').strip('/')
 val_kTau = []
 val_sRho = []
 
 
 if 'rho' in args.weights:
-    weights = sorted(glob.glob('Summaries/{}/{}/*/best_rho_model/epoch=*'.format(args.model, args.dataset)))
+    weights = sorted(glob.glob('Diffusion/{}/{}/*/best_rho_model/epoch=*'.format(args.model, args.dataset)))
     if os.path.isfile('{}/{}/best_rho_results.txt'.format(args.result_dir, args.dataset)):
         os.remove('{}/{}/best_rho_results.txt'.format(args.result_dir, args.dataset))
     file_name = '{}/{}/best_rho_results.txt'.format(args.result_dir, args.dataset)
 
 if 'tau' in args.weights:
-    weights = sorted(glob.glob('Summaries/{}/{}/*/best_tau_model/epoch=*'.format(args.model, args.dataset)))
+    weights = sorted(glob.glob('Diffusion/{}/{}/*/best_tau_model/epoch=*'.format(args.model, args.dataset)))
     if os.path.isfile('{}/{}/best_tau_results.txt'.format(args.result_dir, args.dataset)):
         os.remove('{}/{}/best_tau_results.txt'.format(args.result_dir, args.dataset))
     file_name = '{}/{}/best_tau_results.txt'.format(args.result_dir, args.dataset)
 
-tags =sorted(glob.glob('Summaries/{}/{}/*'.format(args.model, args.dataset)))
+tags =sorted(glob.glob('Diffusion/{}/{}/*'.format(args.model, args.dataset)))
 tags = [a.split('/')[-1] for a in tags if os.path.isdir(a)]
 
 for i in range(0,5):

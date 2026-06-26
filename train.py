@@ -25,7 +25,13 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type = float, default = 1e-4, help = 'the learning rate')
     parser.add_argument('--pt_path', type=str, default='llama_emb/summe_sum/')
 
-    
+    # Plug-and-play diffusion denoiser on encoder outputs (default off).
+    parser.add_argument('--use_diffusion', type=str2bool, default=False)
+    parser.add_argument('--diff_loss_weight', type=float, default=1.0)
+    parser.add_argument('--diff_timesteps', type=int, default=1000)
+    parser.add_argument('--diff_layers', type=int, default=2)
+    parser.add_argument('--diff_strength', type=float, default=0.3)
+
     opt = parser.parse_args()
     kwargs = vars(opt)
     config = Config(**kwargs)

@@ -5,6 +5,7 @@ from einops import repeat
 import pytorch_lightning as pl
 from utils.evaluation_metrics import evaluate_summary
 from utils.generate_summary import generate_summary
+from networks.diffusion import FeatureDiffusion
 from pytorch_lightning import seed_everything
 import pdb
 import numpy as np
@@ -42,6 +43,18 @@ class LLMVS(pl.LightningModule):
                 
         self.criterion = nn.MSELoss()
 
+        # Plug-and-play diffusion denoiser on encoder outputs (default off).
+        self.use_diffusion = getattr(self.config, 'use_diffusion', False)
+        self.diff_loss_weight = getattr(self.config, 'diff_loss_weight', 1.0)
+        if self.use_diffusion:
+            self.diffusion = FeatureDiffusion(
+                dim=self.config.reduced_dim,
+                timesteps=getattr(self.config, 'diff_timesteps', 1000),
+                num_heads=self.config.num_heads,
+                num_layers=getattr(self.config, 'diff_layers', 2),
+                refine_strength=getattr(self.config, 'diff_strength', 0.3),
+            )
+
         self._reset_parameters()
         
     def _reset_parameters(self):
@@ -49,18 +62,23 @@ class LLMVS(pl.LightningModule):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, x, mask):
-
+    def encode(self, x):
+        """Map raw concatenated embeddings to per-frame encoder features [F, D]."""
         x = self.c_max_pooling(x.permute(0,2,1)).squeeze(2)
 
         x = self.d_linear1(x)
-        x = self.d_linear1_norm(x) 
+        x = self.d_linear1_norm(x)
         x = x.unsqueeze(0)
-        
-        x = self.transformer_encoder_agg(x)
-        x = self.mlp_head(x.squeeze(0))
 
-        return  x
+        x = self.transformer_encoder_agg(x).squeeze(0)
+        return x
+
+    def forward(self, x, mask):
+        h = self.encode(x)
+        # Refine encoder outputs with diffusion at inference (train uses raw h).
+        if self.use_diffusion and not self.training:
+            h = self.diffusion.refine(h)
+        return self.mlp_head(h)
     
     def training_step(self, train_batch, batch_idx):
         x1 = train_batch['llama_embedding_userprompt'].squeeze(0)
@@ -70,12 +88,20 @@ class LLMVS(pl.LightningModule):
 
         y = train_batch['gtscore']
         mask = train_batch['mask']
-            
-        score = self.forward(x, mask=mask).squeeze(1).unsqueeze(0)
+
+        h = self.encode(x)
+        score = self.mlp_head(h).squeeze(1).unsqueeze(0)
         del x, mask
         score = score.clamp(0.0, 1.0)
-        
+
         loss = self.criterion(score, y).mean()
+
+        if self.use_diffusion:
+            # Aux denoise loss; detach so diffusion stays a pluggable add-on
+            # and does not reshape the base encoder/scoring objective.
+            diff_loss = self.diffusion.loss(h.detach())
+            loss = loss + self.diff_loss_weight * diff_loss
+            self.log('diff_loss', diff_loss, on_step=True, on_epoch=True, batch_size = 1)
 
         self.log('train_loss', loss, on_step=True, on_epoch=True, batch_size = 1)
 

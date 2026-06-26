@@ -35,7 +35,7 @@ class Config(object):
         """ Function that sets as class attributes the necessary directories for logging important training information.
         """
 
-        self.save_dir_root = f'Summaries/{self.model}/{self.dataset}/{self.tag}'
+        self.save_dir_root = f'Diffusion/{self.model}/{self.dataset}/{self.tag}'
         os.makedirs(self.save_dir_root, exist_ok = True)
 
         f = open(os.path.join(self.save_dir_root, 'configuration.txt'), 'w')
