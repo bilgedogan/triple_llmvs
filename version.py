@@ -1,6 +1,16 @@
 """
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
+* Date: 29/06/2026                                  *
+* Version: 2.9.0                                    *
+* Branch: rl_modality                               *
+* Development:                                      *
+* - Different tests conducted.                      *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
 * Date: 23/06/2026                                  *
 * Version: 2.8.0                                    *
 * Branch: rl_modality                               *

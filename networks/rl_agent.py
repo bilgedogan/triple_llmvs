@@ -43,9 +43,9 @@ class Actor(nn.Module):
     def forward(self, state):
         h = self.net(state)
         raw = self.head(h)
-        alpha = F.softplus(raw)
+        alpha = F.softplus(raw) + 1
         # alpha'yı kafese al: uçlara kaçarsa Dirichlet entropisi patlar (loss'u bozar).
-        alpha = alpha.clamp(min=5, max=20.0)
+        alpha = alpha.clamp(max=20.0)
         return alpha
 
 

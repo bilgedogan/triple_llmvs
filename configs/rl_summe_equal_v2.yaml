@@ -1,0 +1,42 @@
+# Phase 3 (RL / REINFORCE, global baseline) — SumMe, NO joint fine-tune.
+# Mapped-reward scheme:
+#   terminal: correlation_coef*tau + diversity_coef*(2*r2+1)   (both ~[-1,1])
+#   dense:    smoothness_coef*(smooth/2)/T                      (~[-coef,0])
+exp_name: mm_rl_summe_equal_v2
+dataset: summe
+splits: [0,1,2,3,4]
+cuda_devices: "0"
+
+epochs: 200                  # REINFORCE outer iterations
+episodes_per_update: 10
+lr: 5.e-5
+grad_clip: 0.5
+
+# reward coefs
+correlation_coef: 0.7        # terminal tau, primary signal
+diversity_coef: 0.1          # terminal, mapped to [-1,1]
+smoothness_coef: 0.2         # dense, divided by T -> total ~[-0.2,0]
+
+# loss coefs
+entropy_coef: 0.01           # Dirichlet entropy regulariser (keep small)
+aux_mse_coef: 0.5            # aux MSE in [0,0.25]; anchors fusion to gt
+eval_every: 1
+
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+num_workers: 2
+
+# Phase 4 disabled here.
+joint_finetune: false
+lora_rank: 16
+lora_alpha: 32
+lora_lr: 2.0e-4
+head_lr: 2.0e-4
+rl_lr_joint: 3.0e-5
+
+llama_root: llama_emb/summe_sum
+clip_path: clip_features/summe_clip.h5
+audio_path: audio_features/summe_whisper.h5
+
+pretrained_aggregator: Summaries/mm_pretrain_summe_equal/summe/summe_split{split}/best_tau_model/epoch*.ckpt
