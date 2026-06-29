@@ -50,6 +50,9 @@ if __name__ == '__main__':
     parser.add_argument('--audio_path', type=str, default=None)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--fusion_mode', type=str, default='equal', choices=['equal', 'text_only'])
+    parser.add_argument('--use_diffusion', action='store_true', help='Enable DDPM score denoiser after the transformer encoder')
+    parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion noising steps (~20-30)')
+    parser.add_argument('--diffusion_coef', type=float, default=1.0, help='Weight of the diffusion noise-prediction loss')
     opt = parser.parse_args()
     apply_yaml(parser, opt, opt.config)
 

@@ -1,0 +1,22 @@
+# Phase 2 (multimodal aggregator pretrain) — SumMe + score diffusion denoiser
+exp_name: mm_pretrain_summe_diffusion
+dataset: summe
+splits: [0, 1, 2, 3, 4]
+cuda_devices: "0"
+
+epochs: 200
+reduced_dim: 2048
+num_heads: 2
+num_layers: 3
+lr: 1.19e-4
+num_workers: 4
+fusion_mode: "equal"
+
+# DDPM score denoiser after the transformer encoder (plug-and-play)
+use_diffusion: true
+diffusion_steps: 20
+diffusion_coef: 1.0
+
+llama_root: llama_emb/summe_sum
+clip_path: clip_features/summe_clip.h5
+audio_path: audio_features/summe_whisper.h5

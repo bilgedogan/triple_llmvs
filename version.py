@@ -2,6 +2,19 @@
 *****************************************************
 * Author: Nadide Bilge Dogan                        *
 * Date: 29/06/2026                                  *
+* Version: 2.9.1                                    *
+* Branch: rl_diff                                   *
+* Development:                                      *
+* - Basic DDPM score denoiser (networks/diffusion.  *
+*   ScoreDiffusion) after the aggregator transformer*
+*   encoder. Plug-and-play (use_diffusion), ~20-30  *
+*   noising steps, SDEdit refine at eval.           *
+*****************************************************
+"""
+"""
+*****************************************************
+* Author: Nadide Bilge Dogan                        *
+* Date: 29/06/2026                                  *
 * Version: 2.9.0                                    *
 * Branch: rl_modality                               *
 * Development:                                      *

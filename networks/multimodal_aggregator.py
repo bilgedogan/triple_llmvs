@@ -3,6 +3,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 
 from projections import FusionProjections, TextEncoder, FUSED_DIM
+from networks.diffusion import ScoreDiffusion
 from utils.evaluation_metrics import evaluate_summary
 from utils.generate_summary import generate_summary
 
@@ -14,13 +15,20 @@ class MultimodalAggregator(nn.Module):
     5120→2048 projection because the input is already 2048d fused features.
     """
 
-    def __init__(self, reduced_dim=FUSED_DIM, num_heads=2, num_layers=3):
+    def __init__(self, reduced_dim=FUSED_DIM, num_heads=2, num_layers=3,
+                 use_diffusion=False, diffusion_steps=20):
         super().__init__()
         self.reduced_dim = reduced_dim
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=reduced_dim, nhead=num_heads, batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        # Plug-and-play score denoiser; off by default (RL pipeline unaffected).
+        self.use_diffusion = use_diffusion
+        self.diffusion = (
+            ScoreDiffusion(reduced_dim, num_steps=diffusion_steps)
+            if use_diffusion else None
+        )
         self.mlp_head = nn.Sequential(
             nn.Linear(reduced_dim, reduced_dim // 2),
             nn.LayerNorm(reduced_dim // 2),
@@ -42,14 +50,27 @@ class MultimodalAggregator(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, fused, mask=None):
-        """fused: (B, T, 2048). mask: (B, T) boolean — True for valid frames."""
+    def encode(self, fused, mask=None):
+        """Transformer encoder pass -> per-frame features (B, T, reduced_dim)."""
         key_padding_mask = None
         if mask is not None:
             # nn.TransformerEncoder expects True for *padded* positions.
             key_padding_mask = ~mask
-        x = self.transformer(fused, src_key_padding_mask=key_padding_mask)
-        scores = self.mlp_head(x).squeeze(-1)
+        return self.transformer(fused, src_key_padding_mask=key_padding_mask)
+
+    def head(self, x):
+        """Encoder features -> per-frame importance score (B, T)."""
+        return self.mlp_head(x).squeeze(-1)
+
+    def forward(self, fused, mask=None, denoise=False):
+        """fused: (B, T, 2048). mask: (B, T) boolean — True for valid frames.
+
+        denoise=True runs the diffusion refine over the base scores (eval).
+        """
+        x = self.encode(fused, mask)
+        scores = self.head(x)
+        if denoise and self.diffusion is not None:
+            scores = self.diffusion.refine(x, scores.clamp(0.0, 1.0))
         return scores
 
 
@@ -73,7 +94,10 @@ class PretrainPLModule(pl.LightningModule):
             reduced_dim=config.reduced_dim,
             num_heads=config.num_heads,
             num_layers=config.num_layers,
+            use_diffusion=getattr(config, 'use_diffusion', False),
+            diffusion_steps=getattr(config, 'diffusion_steps', 20),
         )
+        self.diffusion_coef = getattr(config, 'diffusion_coef', 1.0)
         self.criterion = nn.MSELoss(reduction='none')
 
     def _build_fused(self, batch):
@@ -97,11 +121,16 @@ class PretrainPLModule(pl.LightningModule):
         mask = batch['mask'].to(self.device)
         fused = self._build_fused(batch)
         # scores = self.aggregator(fused, mask=mask).clamp(0.0, 1.0)
-        scores = self.aggregator(fused, mask=None).clamp(0.0, 1.0)
+        x = self.aggregator.encode(fused, mask=None)
+        scores = self.aggregator.head(x).clamp(0.0, 1.0)
         gt = batch['gtscore']
 #        loss_per = self.criterion(scores, gt)
 #        loss = (loss_per * mask.float()).sum() / mask.float().sum().clamp_min(1.0)
         loss = self.criterion(scores, gt).mean()
+        if self.aggregator.diffusion is not None:
+            diff_loss = self.aggregator.diffusion.loss(x.detach(), gt)
+            self.log('train_diff_loss', diff_loss, on_step=True, on_epoch=True, batch_size=fused.shape[0])
+            loss = loss + self.diffusion_coef * diff_loss
         self.log('train_loss', loss, on_step=True, on_epoch=True, batch_size=fused.shape[0])
         return loss
 
@@ -109,7 +138,7 @@ class PretrainPLModule(pl.LightningModule):
         mask = batch['mask'].to(self.device)
         fused = self._build_fused(batch)
         # scores = self.aggregator(fused, mask=mask).clamp(0.0, 1.0)
-        scores = self.aggregator(fused, mask=None).clamp(0.0, 1.0)
+        scores = self.aggregator(fused, mask=None, denoise=True).clamp(0.0, 1.0)
         # Only batch size 1 for val/test (variable-length cross-validation).
         score = scores[bidx][mask[bidx]]
         cps = batch['change_points'][bidx]
